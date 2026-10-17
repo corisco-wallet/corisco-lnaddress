@@ -1,0 +1,5 @@
+# Default owner for the whole repo. Add path-scoped lines below once there
+# are trusted co-reviewers for a specific area -- combined with branch
+# protection's "require review from code owners", this is what gates who
+# can approve a PR touching that path.
+* @ruipedro07
