@@ -5,8 +5,8 @@ services:
     build: .
     image: corisco-lnaddress:latest
     restart: unless-stopped
-    expose:
-      - "3000"
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
     environment:
       SPARK_NETWORK: ${SPARK_NETWORK:-REGTEST}
       LNADDRESS_DOMAIN: ${LNADDRESS_DOMAIN:?LNADDRESS_DOMAIN is required}
@@ -16,23 +16,5 @@ services:
     volumes:
       - lnaddress-data:/data
 
-  caddy:
-    image: caddy:2.8.4-alpine
-    restart: unless-stopped
-    depends_on:
-      - lnaddress
-    ports:
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      LNADDRESS_DOMAIN: ${LNADDRESS_DOMAIN:?LNADDRESS_DOMAIN is required}
-      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-
 volumes:
   lnaddress-data:
-  caddy-data:
-  caddy-config:

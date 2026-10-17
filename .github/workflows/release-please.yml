@@ -48,9 +48,9 @@ jobs:
         env:
           SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
           LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
-          API_DOMAIN: ${{ vars.API_DOMAIN }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
+          PORT: ${{ vars.PORT }}
 
       - name: Prune old images
         run: docker image prune -f
