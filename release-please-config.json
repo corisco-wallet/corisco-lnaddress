@@ -4,6 +4,7 @@
     ".": {
       "release-type": "node",
       "package-name": "corisco-lnaddress",
+      "initial-version": "0.1.0",
       "include-v-prefix": true,
       "include-component-in-tag": false
     }
