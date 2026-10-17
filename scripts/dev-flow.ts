@@ -5,14 +5,15 @@ import { decode } from "light-bolt11-decoder";
 import { registrationDigest } from "../src/auth";
 
 const baseUrl = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+const lnurlBaseUrl = (process.env.LNURL_BASE_URL ?? baseUrl).replace(/\/+$/, "");
 const domain = process.env.LNADDRESS_DOMAIN;
 const payerMnemonic = process.env.PAYER_MNEMONIC;
 const amountSats = Number(process.env.AMOUNT_SATS ?? 1000);
 
 if (!domain) throw new Error("LNADDRESS_DOMAIN must match the server's value");
 
-async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, init);
+async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   return (await res.json()) as T;
 }
 
@@ -22,9 +23,9 @@ const { wallet: user } = await SparkWallet.initialize({ mnemonicOrSeed: mnemonic
 const identityPubkey = await user.getIdentityPublicKey();
 console.log("user identity pubkey:", identityPubkey);
 
-const { nonce } = await getJson<{ nonce: string }>("/challenge");
+const { nonce } = await getJson<{ nonce: string }>(`${baseUrl}/challenge`);
 const signature = bytesToHex(await signer.signMessageWithIdentityKey(registrationDigest(nonce, domain)));
-const registered = await getJson<{ username: string; address: string }>("/users", {
+const registered = await getJson<{ username: string; address: string }>(`${baseUrl}/users`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ identityPubkey, nonce, signature }),
@@ -32,11 +33,11 @@ const registered = await getJson<{ username: string; address: string }>("/users"
 console.log("registered:", registered);
 
 const payRequest = await getJson<{ callback: string; minSendable: number; maxSendable: number; metadata: string }>(
-  `/.well-known/lnurlp/${registered.username}`,
+  `${lnurlBaseUrl}/.well-known/lnurlp/${registered.username}`,
 );
 console.log("payRequest:", payRequest);
 
-const { pr } = await getJson<{ pr: string }>(new URL(payRequest.callback).pathname + `?amount=${amountSats * 1000}`);
+const { pr } = await getJson<{ pr: string }>(`${payRequest.callback}?amount=${amountSats * 1000}`);
 const hTag = (decode(pr).sections as { name: string; value?: unknown }[]).find((s) => s.name === "description_hash")?.value;
 const expected = createHash("sha256").update(payRequest.metadata).digest("hex");
 console.log("invoice h tag matches sha256(metadata):", hTag === expected);
