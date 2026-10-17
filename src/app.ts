@@ -70,7 +70,7 @@ export function createApp({ config, users, challenges, invoices }: Deps): Hono {
         receiverIdentityPubkey: user.identityPubkey,
         expirySeconds: INVOICE_EXPIRY_SECONDS,
       });
-      return c.json({ pr, routes: [] });
+      return c.json({ pr, successAction: null, disposable: false, routes: [] });
     } catch (err) {
       console.error("invoice creation failed:", err);
       return c.json(lnurlError("could not create invoice"));

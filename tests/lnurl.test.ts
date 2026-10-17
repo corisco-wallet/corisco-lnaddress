@@ -33,7 +33,7 @@ describe("GET /lnurl/callback/:username", () => {
   it("mints an invoice for the registered pubkey bound to the metadata hash", async () => {
     const { app, created, username, pubkey } = await registered();
     const res = await app.request(`/lnurl/callback/${username}?amount=5000000`);
-    expect(await res.json()).toEqual({ pr: "lnbcrt-test-invoice", routes: [] });
+    expect(await res.json()).toEqual({ pr: "lnbcrt-test-invoice", successAction: null, disposable: false, routes: [] });
     expect(created).toEqual([
       {
         amountSats: 5000,
