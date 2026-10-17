@@ -1,6 +1,6 @@
 {
   "name": "corisco-lnaddress",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "main": "index.js",
   "scripts": {
     "test": "vitest run",
@@ -22,12 +22,12 @@
     "@noble/hashes": "^2.4.0",
     "better-sqlite3": "^12.11.1",
     "hono": "^4.13.13",
-    "light-bolt11-decoder": "^3.2.0"
+    "light-bolt11-decoder": "^3.2.0",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^3.2.6"
   }

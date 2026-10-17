@@ -1,0 +1,56 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  # Redeploy an existing release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Opens/updates the release PR (version bump in package.json, CHANGELOG.md)
+  # from conventional commits; merging it tags vX.Y.Z and creates the GitHub Release.
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  deploy:
+    needs: release-please
+    if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: self-hosted
+    concurrency: deploy
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build and start Docker Compose
+        run: docker compose up --build -d --remove-orphans
+        env:
+          SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
+          LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
+
+      - name: Prune old images
+        run: docker image prune -f

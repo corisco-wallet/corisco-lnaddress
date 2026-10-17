@@ -1,0 +1,23 @@
+{$LNADDRESS_DOMAIN} {
+	handle /.well-known/lnurlp/* {
+		reverse_proxy lnaddress:3000
+	}
+	handle /lnurl/* {
+		reverse_proxy lnaddress:3000
+	}
+	handle {
+		respond "not found" 404
+	}
+}
+
+{$API_DOMAIN} {
+	handle /challenge {
+		reverse_proxy lnaddress:3000
+	}
+	handle /users {
+		reverse_proxy lnaddress:3000
+	}
+	handle {
+		respond "not found" 404
+	}
+}
