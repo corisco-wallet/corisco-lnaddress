@@ -6,8 +6,7 @@ RUN npm ci --omit=dev
 
 FROM node:20-bookworm-slim
 ENV NODE_ENV=production \
-    PORT=3000 \
-    DB_PATH=/data/lnaddress.db
+    PORT=3000
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./

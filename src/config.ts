@@ -1,11 +1,22 @@
+import { parseDataKey } from "./crypto";
+
 export type Network = "REGTEST" | "MAINNET";
+
+export interface DatabaseConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  name: string;
+}
 
 export interface Config {
   port: number;
   network: Network;
   domain: string;
   publicBaseUrl: string;
-  dbPath: string;
+  database: DatabaseConfig;
+  dataKey: Buffer;
   serverMnemonic: string;
   maxSendableSats: number;
 }
@@ -35,7 +46,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     network,
     domain: required(env, "LNADDRESS_DOMAIN").toLowerCase(),
     publicBaseUrl,
-    dbPath: env.DB_PATH ?? "./data/lnaddress.db",
+    database: {
+      host: required(env, "DB_HOST"),
+      port: Number(env.DB_PORT ?? 3306),
+      user: required(env, "DB_USER"),
+      password: required(env, "DB_PASSWORD"),
+      name: required(env, "DB_NAME"),
+    },
+    dataKey: parseDataKey(required(env, "DATA_ENCRYPTION_KEY")),
     serverMnemonic: required(env, "SERVER_MNEMONIC"),
     maxSendableSats,
   };

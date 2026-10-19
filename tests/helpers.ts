@@ -4,8 +4,8 @@ import { createApp } from "../src/app";
 import { registrationDigest } from "../src/auth";
 import { ChallengeStore } from "../src/challenge";
 import type { Config } from "../src/config";
-import { UserStore } from "../src/db";
 import type { InvoiceRequest } from "../src/invoices";
+import { MemoryUserStore } from "./memory-store";
 
 export const DOMAIN = "example.test";
 
@@ -14,7 +14,8 @@ export const config: Config = {
   network: "REGTEST",
   domain: DOMAIN,
   publicBaseUrl: "https://example.test",
-  dbPath: ":memory:",
+  database: { host: "unused", port: 3306, user: "unused", password: "unused", name: "unused" },
+  dataKey: Buffer.alloc(32),
   serverMnemonic: "unused",
   maxSendableSats: 100_000,
 };
@@ -31,7 +32,7 @@ export function sign(secretKey: Uint8Array, nonce: string, format: "compact" | "
 
 export function buildTestApp() {
   const created: InvoiceRequest[] = [];
-  const users = new UserStore(":memory:");
+  const users = new MemoryUserStore();
   const challenges = new ChallengeStore();
   const app = createApp({
     config,

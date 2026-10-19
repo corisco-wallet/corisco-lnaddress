@@ -47,6 +47,9 @@ jobs:
         run: docker compose up --build -d --remove-orphans
         env:
           SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
+          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
