@@ -7,14 +7,40 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
     environment:
       SPARK_NETWORK: ${SPARK_NETWORK:-REGTEST}
       LNADDRESS_DOMAIN: ${LNADDRESS_DOMAIN:?LNADDRESS_DOMAIN is required}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
       SERVER_MNEMONIC: ${SERVER_MNEMONIC:?SERVER_MNEMONIC is required}
       MAX_SENDABLE_SATS: ${MAX_SENDABLE_SATS:-1000000}
+      DB_HOST: mysql
+      DB_NAME: lnaddress
+      DB_USER: lnaddress
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?DATA_ENCRYPTION_KEY is required}
     volumes:
       - lnaddress-data:/data
 
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: lnaddress
+      MYSQL_USER: lnaddress
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
 volumes:
   lnaddress-data:
+  mysql-data:

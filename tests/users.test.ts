@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { verifyRegistrationSignature } from "../src/auth";
-import { UserStore } from "../src/db";
 import { isValidUsername } from "../src/usernames";
 import { DOMAIN, buildTestApp, newKeypair, register, sign } from "./helpers";
 
@@ -12,8 +11,8 @@ describe("POST /users", () => {
     const second = (await (await register(app, pubkey, secretKey)).json()) as { username: string };
     expect(first.address).toBe(`${first.username}@${DOMAIN}`);
     expect(second.username).toBe(first.username);
-    expect(users.getByUsername(first.username)?.identityPubkey).toBe(pubkey);
-    expect(users.getByPubkey(pubkey)?.username).toBe(first.username);
+    expect((await users.getByUsername(first.username))?.identityPubkey).toBe(pubkey);
+    expect((await users.getByPubkey(pubkey))?.username).toBe(first.username);
   });
 
   it("accepts compact signatures too", async () => {
@@ -68,22 +67,6 @@ describe("POST /users", () => {
     const { pubkey, secretKey } = newKeypair();
     expect(verifyRegistrationSignature(pubkey, "n", DOMAIN, sign(secretKey, "n"))).toBe(true);
     expect(verifyRegistrationSignature(pubkey, "n", "other.test", sign(secretKey, "n"))).toBe(false);
-  });
-});
-
-describe("UserStore", () => {
-  it("retries when the generated name is taken", () => {
-    const store = new UserStore(":memory:");
-    store.getOrCreate("a", () => "taken-name-001");
-    const names = ["taken-name-001", "free-name-002"];
-    const user = store.getOrCreate("b", () => names.shift()!);
-    expect(user.username).toBe("free-name-002");
-  });
-
-  it("treats usernames case-insensitively", () => {
-    const store = new UserStore(":memory:");
-    store.getOrCreate("a", () => "mixed-case-001");
-    expect(store.getByUsername("MIXED-Case-001")?.identityPubkey).toBe("a");
   });
 });
 

@@ -42,12 +42,12 @@ export function createApp({ config, users, challenges, invoices }: Deps): Hono {
     if (!verifyRegistrationSignature(pubkey, nonce, config.domain, signature)) {
       return c.json({ error: "invalid signature" }, 401);
     }
-    const user = users.getOrCreate(pubkey);
+    const user = await users.getOrCreate(pubkey);
     return c.json({ username: user.username, address: `${user.username}@${config.domain}` });
   });
 
-  app.get("/.well-known/lnurlp/:username", (c) => {
-    const user = users.getByUsername(c.req.param("username"));
+  app.get("/.well-known/lnurlp/:username", async (c) => {
+    const user = await users.getByUsername(c.req.param("username"));
     if (!user?.active) return c.json(lnurlError("unknown user"));
     return c.json({
       tag: "payRequest",
@@ -59,7 +59,7 @@ export function createApp({ config, users, challenges, invoices }: Deps): Hono {
   });
 
   app.get("/lnurl/callback/:username", async (c) => {
-    const user = users.getByUsername(c.req.param("username"));
+    const user = await users.getByUsername(c.req.param("username"));
     if (!user?.active) return c.json(lnurlError("unknown user"));
     const amount = parseAmountMsats(c.req.query("amount"), config.maxSendableSats);
     if ("error" in amount) return c.json(lnurlError(amount.error));

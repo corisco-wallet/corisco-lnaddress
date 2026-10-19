@@ -23,6 +23,7 @@
     "better-sqlite3": "^12.11.1",
     "hono": "^4.13.13",
     "light-bolt11-decoder": "^3.2.0",
+    "mysql2": "^3.24.6",
     "tsx": "^4.23.15"
   },
   "devDependencies": {

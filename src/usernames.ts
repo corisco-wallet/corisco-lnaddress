@@ -26,5 +26,5 @@ export function isValidUsername(name: string): boolean {
 export function generateUsername(): string {
   const adjective = ADJECTIVES[randomInt(ADJECTIVES.length)];
   const noun = NOUNS[randomInt(NOUNS.length)];
-  return `${adjective}-${noun}-${String(randomInt(1000)).padStart(3, "0")}`;
+  return `${adjective}${noun}${String(randomInt(1000)).padStart(3, "0")}`;
 }
