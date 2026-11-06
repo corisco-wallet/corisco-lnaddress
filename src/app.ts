@@ -4,7 +4,9 @@ import { isValidPubkey, verifyRegistrationSignature } from "./auth";
 import type { ChallengeStore } from "./challenge";
 import type { Config } from "./config";
 import type { UserStore } from "./db";
+import type { InvoiceStore } from "./invoice-store";
 import type { InvoiceCreator } from "./invoices";
+import { FIRST_CHECK_DELAY_MS } from "./settlement";
 import { INVOICE_EXPIRY_SECONDS, MIN_SENDABLE_SATS, buildMetadata, descriptionHash, parseAmountMsats } from "./lnurl";
 
 export interface Deps {
@@ -12,11 +14,13 @@ export interface Deps {
   users: UserStore;
   challenges: ChallengeStore;
   invoices: InvoiceCreator;
+  invoiceStore: InvoiceStore;
+  now?: () => number;
 }
 
 const lnurlError = (reason: string) => ({ status: "ERROR", reason });
 
-export function createApp({ config, users, challenges, invoices }: Deps): Hono {
+export function createApp({ config, users, challenges, invoices, invoiceStore, now = Date.now }: Deps): Hono {
   const app = new Hono();
 
   app.use("/.well-known/lnurlp/*", cors());
@@ -64,13 +68,27 @@ export function createApp({ config, users, challenges, invoices }: Deps): Hono {
     const amount = parseAmountMsats(c.req.query("amount"), config.maxSendableSats);
     if ("error" in amount) return c.json(lnurlError(amount.error));
     try {
-      const pr = await invoices.createInvoice({
+      const invoice = await invoices.createInvoice({
         amountSats: amount.sats,
         descriptionHash: descriptionHash(buildMetadata(user.username, config.domain)),
         receiverIdentityPubkey: user.identityPubkey,
         expirySeconds: INVOICE_EXPIRY_SECONDS,
       });
-      return c.json({ pr, successAction: null, disposable: false, routes: [] });
+      // Only hand out invoices we can track; one that fails to store is never shown to the payer.
+      const createdAt = now();
+      await invoiceStore.create(
+        {
+          paymentHash: invoice.paymentHash,
+          receiveRequestId: invoice.receiveRequestId,
+          username: user.username,
+          amountMsat: amount.sats * 1000,
+          pr: invoice.pr,
+          createdAt,
+          expiresAt: invoice.expiresAt,
+        },
+        createdAt + FIRST_CHECK_DELAY_MS,
+      );
+      return c.json({ pr: invoice.pr, successAction: null, disposable: false, routes: [] });
     } catch (err) {
       console.error("invoice creation failed:", err);
       return c.json(lnurlError("could not create invoice"));

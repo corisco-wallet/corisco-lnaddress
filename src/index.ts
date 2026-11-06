@@ -4,9 +4,11 @@ import { createApp } from "./app";
 import { ChallengeStore } from "./challenge";
 import { loadConfig } from "./config";
 import { createDataCipher } from "./crypto";
-import { createSparkInvoiceCreator } from "./invoices";
+import { createSparkLightning } from "./invoices";
 import { runMigrations } from "./migrations";
+import { MysqlInvoiceStore } from "./mysql-invoice-store";
 import { MysqlUserStore } from "./mysql-store";
+import { SettlementWatcher } from "./settlement";
 
 const config = loadConfig();
 const pool = createPool({
@@ -21,15 +23,23 @@ const pool = createPool({
 });
 
 await runMigrations(pool);
-const users = new MysqlUserStore(pool, createDataCipher(config.dataKey));
+const cipher = createDataCipher(config.dataKey);
+const users = new MysqlUserStore(pool, cipher);
 await users.verifyKey();
+const invoiceStore = new MysqlInvoiceStore(pool, cipher);
 
-const invoices = await createSparkInvoiceCreator(config.serverMnemonic, config.network);
-const app = createApp({ config, users, challenges: new ChallengeStore(), invoices });
+const spark = await createSparkLightning(config.serverMnemonic, config.network);
+const settlement = new SettlementWatcher({ store: invoiceStore, source: spark, retentionDays: config.invoiceRetentionDays });
+settlement.start();
+
+const app = createApp({ config, users, challenges: new ChallengeStore(), invoices: spark, invoiceStore });
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => console.log(`listening on :${port}`));
 
 process.on("SIGTERM", () => {
   server.close();
-  void users.close().finally(() => process.exit(0));
+  void settlement
+    .stop()
+    .then(() => users.close())
+    .finally(() => process.exit(0));
 });

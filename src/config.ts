@@ -19,6 +19,8 @@ export interface Config {
   dataKey: Buffer;
   serverMnemonic: string;
   maxSendableSats: number;
+  /** How long paid invoices are kept, for payment status lookups. */
+  invoiceRetentionDays: number;
 }
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
@@ -41,6 +43,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const maxSendableSats = Number(env.MAX_SENDABLE_SATS ?? 1_000_000);
   if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be a positive integer");
   if (!Number.isInteger(maxSendableSats) || maxSendableSats < 1) throw new Error("MAX_SENDABLE_SATS must be a positive integer");
+  const invoiceRetentionDays = Number(env.INVOICE_RETENTION_DAYS?.trim() || 7);
+  if (!Number.isInteger(invoiceRetentionDays) || invoiceRetentionDays < 1) {
+    throw new Error("INVOICE_RETENTION_DAYS must be a positive integer");
+  }
   return {
     port,
     network,
@@ -56,5 +62,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataKey: parseDataKey(required(env, "DATA_ENCRYPTION_KEY")),
     serverMnemonic: required(env, "SERVER_MNEMONIC"),
     maxSendableSats,
+    invoiceRetentionDays,
   };
 }
