@@ -3,11 +3,16 @@ name: release-please
 on:
   push:
     branches: [main]
-  # Redeploy an existing release.
+  # Deploy any branch to test, or redeploy a release tag to production. Run it from main.
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag to deploy"
+      environment:
+        description: "Environment to deploy"
+        type: choice
+        options: [test, production]
+        default: test
+      ref:
+        description: "Branch, tag or SHA to deploy (production: a release tag like v0.2.0)"
         required: true
 
 permissions:
@@ -31,29 +36,19 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  deploy:
+  # Every push to main goes to test.
+  deploy-test:
+    if: github.event_name == 'push' || inputs.environment == 'test'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: test
+      ref: ${{ inputs.ref || github.sha }}
+
+  # Only new releases, or a manual redeploy of a release tag, go to production.
+  deploy-production:
     needs: release-please
-    if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
-    runs-on: self-hosted
-    concurrency: deploy
-    env:
-      TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-
-      - name: Build and start Docker Compose
-        run: docker compose up --build -d --remove-orphans
-        env:
-          SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
-          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
-          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
-          SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
-          PORT: ${{ vars.PORT }}
-
-      - name: Prune old images
-        run: docker image prune -f
+    if: always() && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production'))
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      ref: ${{ needs.release-please.outputs.tag_name || inputs.ref }}

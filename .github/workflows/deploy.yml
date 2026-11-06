@@ -1,0 +1,63 @@
+name: deploy
+
+# Deploys one environment on the self-hosted server. Called by release-please.yml.
+# Secrets and variables come from the GitHub Environment named by `environment`; repo-level
+# secrets are deliberately not passed in, so a missing test secret can never fall back to production's.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment to deploy: production or test"
+        type: string
+        required: true
+      ref:
+        description: "Branch, tag or SHA to check out"
+        type: string
+        required: true
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}
+    concurrency: deploy-${{ inputs.environment }}
+    env:
+      # Each environment is a separate Compose project, so it gets its own containers, network and MySQL volume.
+      # Production keeps the original project name so its existing volumes are reused.
+      COMPOSE_PROJECT_NAME: ${{ inputs.environment == 'production' && 'corisco-lnaddress' || format('corisco-lnaddress-{0}', inputs.environment) }}
+      IMAGE_TAG: ${{ inputs.environment }}
+      REF: ${{ inputs.ref }}
+    steps:
+      - name: Check inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          PORT: ${{ vars.PORT }}
+        run: |
+          case "$ENVIRONMENT" in production|test) ;; *) echo "unknown environment: $ENVIRONMENT"; exit 1 ;; esac
+          if [ "$ENVIRONMENT" = production ] && ! printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "production only deploys release tags (vX.Y.Z), got: $REF"; exit 1
+          fi
+          # Without these, the stack would start with the wrong domain or try to take another environment's port.
+          for name in LNADDRESS_DOMAIN PUBLIC_BASE_URL PORT; do
+            if [ -z "$(printenv "$name")" ]; then echo "variable $name is not set on the $ENVIRONMENT environment"; exit 1; fi
+          done
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Build and start Docker Compose
+        run: docker compose -p "$COMPOSE_PROJECT_NAME" up --build -d --remove-orphans
+        env:
+          SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
+          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
+          PORT: ${{ vars.PORT }}
+
+      - name: Prune old images
+        run: docker image prune -f

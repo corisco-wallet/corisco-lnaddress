@@ -1,9 +1,11 @@
+# Project name; deploys override it with COMPOSE_PROJECT_NAME (e.g. corisco-lnaddress-test) to run a second stack.
 name: corisco-lnaddress
 
 services:
   lnaddress:
     build: .
-    image: corisco-lnaddress:latest
+    # One tag per environment, so building test never replaces the image production runs.
+    image: corisco-lnaddress:${IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
