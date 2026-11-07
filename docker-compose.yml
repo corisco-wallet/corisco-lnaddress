@@ -1,3 +1,4 @@
+# Local development only. Deployed environments use the image CI publishes to GHCR.
 name: corisco-lnaddress
 
 services:
@@ -21,8 +22,6 @@ services:
       DB_USER: lnaddress
       DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?DATA_ENCRYPTION_KEY is required}
-    volumes:
-      - lnaddress-data:/data
 
   mysql:
     image: mysql:8.4
@@ -42,5 +41,4 @@ services:
       start_period: 30s
 
 volumes:
-  lnaddress-data:
   mysql-data:

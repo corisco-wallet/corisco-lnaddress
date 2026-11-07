@@ -3,12 +3,6 @@ name: release-please
 on:
   push:
     branches: [main]
-  # Redeploy an existing release.
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag to deploy"
-        required: true
 
 permissions:
   contents: write
@@ -18,7 +12,6 @@ jobs:
   # Opens/updates the release PR (version bump in package.json, CHANGELOG.md)
   # from conventional commits; merging it tags vX.Y.Z and creates the GitHub Release.
   release-please:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
@@ -31,29 +24,72 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  deploy:
+  # Builds every push to main as ghcr.io/corisco-wallet/corisco-lnaddress:main-<sha>,
+  # and also tags it vX.Y.Z when that push created a release.
+  image:
     needs: release-please
-    if: always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
-    runs-on: self-hosted
-    concurrency: deploy
-    env:
-      TAG: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tags.outputs.sha_tag }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
 
-      - name: Build and start Docker Compose
-        run: docker compose up --build -d --remove-orphans
+      - id: tags
         env:
-          SERVER_MNEMONIC: ${{ secrets.SERVER_MNEMONIC }}
-          DATA_ENCRYPTION_KEY: ${{ secrets.DATA_ENCRYPTION_KEY }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          LNADDRESS_DOMAIN: ${{ vars.LNADDRESS_DOMAIN }}
-          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
-          SPARK_NETWORK: ${{ vars.SPARK_NETWORK || 'REGTEST' }}
-          PORT: ${{ vars.PORT }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || '' }}
+        run: |
+          image=ghcr.io/corisco-wallet/corisco-lnaddress
+          sha_tag="main-${GITHUB_SHA::12}"
+          tags="$image:$sha_tag"
+          if [ -n "$RELEASE_TAG" ]; then tags="$tags,$image:$RELEASE_TAG"; fi
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG:-$sha_tag}" >> "$GITHUB_OUTPUT"
 
-      - name: Prune old images
-        run: docker image prune -f
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.licenses=ISC
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Deployment happens elsewhere; this only asks for it. Every push goes to test, releases go to production.
+  request-deploy:
+    needs: [release-please, image]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+      SHA_TAG: ${{ needs.image.outputs.tag }}
+      RELEASE_TAG: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || '' }}
+    steps:
+      - name: Deploy to test
+        run: |
+          gh api repos/corisco-wallet/infra/dispatches -f event_type=deploy-lnaddress \
+            -f "client_payload[environment]=test" -f "client_payload[image]=$SHA_TAG" -f "client_payload[digest]=$DIGEST"
+
+      - name: Deploy to production
+        if: env.RELEASE_TAG != ''
+        run: |
+          gh api repos/corisco-wallet/infra/dispatches -f event_type=deploy-lnaddress \
+            -f "client_payload[environment]=production" -f "client_payload[image]=$RELEASE_TAG" -f "client_payload[digest]=$DIGEST"
