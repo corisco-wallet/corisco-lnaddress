@@ -59,6 +59,13 @@ export function describeInvoiceStore(name: string, create: () => Promise<{ store
       expect((await store.get(HASH_A))?.pr).toBe("lnbcrt210n1-test-invoice-a");
     });
 
+    it("finds an invoice by its Spark receive request id", async () => {
+      await store.create(newInvoice({ paymentHash: HASH_A, receiveRequestId: "spark-request-a" }), 4_000);
+      await store.create(newInvoice({ paymentHash: HASH_B, receiveRequestId: "spark-request-b" }), 4_000);
+      expect((await store.getByReceiveRequestId("spark-request-b"))?.paymentHash).toBe(HASH_B);
+      expect(await store.getByReceiveRequestId("spark-request-z")).toBeUndefined();
+    });
+
     it("lists due pending invoices, earliest check first, up to the limit", async () => {
       await store.create(newInvoice({ paymentHash: HASH_A }), 5_000);
       await store.create(newInvoice({ paymentHash: HASH_B }), 3_000);

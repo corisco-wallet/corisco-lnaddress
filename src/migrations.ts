@@ -38,6 +38,11 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       INDEX idx_invoices_settled (status, settled_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+  {
+    // Spark webhooks name the receive request, not the payment hash.
+    id: "003-index-invoice-receive-request",
+    sql: "CREATE INDEX idx_invoices_receive_request ON invoices (receive_request_id)",
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

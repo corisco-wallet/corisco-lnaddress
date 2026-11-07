@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Invoice } from "../src/invoice-store";
 import { isSettledStatus, type ReceiveStatus } from "../src/invoices";
-import { SettlementWatcher, nextCheckDelay, preimageMatches } from "../src/settlement";
+import { type CheckSchedule, SettlementWatcher, backstopCheckDelay, nextCheckDelay, preimageMatches } from "../src/settlement";
 import { newInvoice } from "./invoice-store-contract";
 import { MemoryInvoiceStore } from "./memory-invoice-store";
 import { MemoryUserStore } from "./memory-store";
@@ -12,7 +12,7 @@ const DAY = 24 * 60 * MINUTE;
 const PREIMAGE = "5a".repeat(32);
 const HASH = createHash("sha256").update(Buffer.from(PREIMAGE, "hex")).digest("hex");
 
-async function setup() {
+async function setup(schedule?: CheckSchedule) {
   const users = new MemoryUserStore();
   await users.getOrCreate("02" + "ab".repeat(32), () => "payee-name-001");
   const store = new MemoryInvoiceStore(users);
@@ -23,6 +23,7 @@ async function setup() {
   const watcher = new SettlementWatcher({
     store,
     retentionDays: 7,
+    schedule,
     now: () => clock,
     log,
     source: {
@@ -192,6 +193,37 @@ describe("SettlementWatcher", () => {
     expect(await watcher.purge()).toBe(1);
   });
 
+  it("follows a custom schedule", async () => {
+    const { watcher, store, at } = await setup(backstopCheckDelay);
+    expect(watcher.firstCheckDelayMs).toBe(30_000);
+    at(3_000);
+    await watcher.poll();
+    expect(await store.due(33_000 - 1, 10)).toHaveLength(0);
+    expect(await store.due(33_000, 10)).toHaveLength(1);
+  });
+
+  it("checkSoon makes a pending invoice due now, and the check still verifies with Spark", async () => {
+    const { watcher, store, statuses, lookups, settled, at } = await setup(backstopCheckDelay);
+    at(1_000);
+    await watcher.poll();
+    expect(lookups).toEqual([]);
+
+    // A webhook that arrives before Spark reports the payment settles nothing.
+    expect(await watcher.checkSoon("req")).toBe(true);
+    await watcher.poll();
+    expect(lookups).toEqual(["req"]);
+    expect((await store.get(HASH))?.status).toBe("pending");
+
+    statuses.set("req", { settled: true, preimage: PREIMAGE });
+    expect(await watcher.checkSoon("req")).toBe(true);
+    await watcher.poll();
+    expect((await store.get(HASH))?.status).toBe("settled");
+    expect(settled).toHaveLength(1);
+
+    expect(await watcher.checkSoon("req")).toBe(false);
+    expect(await watcher.checkSoon("unknown")).toBe(false);
+  });
+
   it("stops cleanly while running on timers", async () => {
     const { watcher, lookups, at } = await setup();
     at(3_000);
@@ -214,6 +246,7 @@ describe("helpers", () => {
 
   it("backs off with age", () => {
     expect([0, 3 * MINUTE, 30 * MINUTE].map(nextCheckDelay)).toEqual([3_000, 15_000, 60_000]);
+    expect([0, 3 * MINUTE, 30 * MINUTE].map(backstopCheckDelay)).toEqual([30_000, 120_000, 120_000]);
   });
 
   it("only treats received payments as settled", () => {

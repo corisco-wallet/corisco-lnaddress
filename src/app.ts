@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { isValidPubkey, verifyRegistrationSignature } from "./auth";
 import type { ChallengeStore } from "./challenge";
@@ -7,6 +8,13 @@ import type { UserStore } from "./db";
 import type { InvoiceStore } from "./invoice-store";
 import type { InvoiceCreator } from "./invoices";
 import { FIRST_CHECK_DELAY_MS } from "./settlement";
+import {
+  MAX_WEBHOOK_BODY_BYTES,
+  SPARK_WEBHOOK_PATH,
+  receiveRequestIdCandidates,
+  receiveRequestIdFrom,
+  signatureMatches,
+} from "./spark-webhook";
 import { INVOICE_EXPIRY_SECONDS, MIN_SENDABLE_SATS, buildMetadata, descriptionHash, parseAmountMsats } from "./lnurl";
 
 export interface Deps {
@@ -15,12 +23,29 @@ export interface Deps {
   challenges: ChallengeStore;
   invoices: InvoiceCreator;
   invoiceStore: InvoiceStore;
+  /** Must match the settlement watcher's schedule. */
+  firstCheckDelayMs?: number;
+  sparkWebhook?: SparkWebhookDeps;
   now?: () => number;
+}
+
+export interface SparkWebhookDeps {
+  secret: string;
+  checkSoon(receiveRequestId: string): Promise<boolean>;
 }
 
 const lnurlError = (reason: string) => ({ status: "ERROR", reason });
 
-export function createApp({ config, users, challenges, invoices, invoiceStore, now = Date.now }: Deps): Hono {
+export function createApp({
+  config,
+  users,
+  challenges,
+  invoices,
+  invoiceStore,
+  firstCheckDelayMs = FIRST_CHECK_DELAY_MS,
+  sparkWebhook,
+  now = Date.now,
+}: Deps): Hono {
   const app = new Hono();
 
   app.use("/.well-known/lnurlp/*", cors());
@@ -86,7 +111,7 @@ export function createApp({ config, users, challenges, invoices, invoiceStore, n
           createdAt,
           expiresAt: invoice.expiresAt,
         },
-        createdAt + FIRST_CHECK_DELAY_MS,
+        createdAt + firstCheckDelayMs,
       );
       return c.json({ pr: invoice.pr, successAction: null, disposable: false, routes: [] });
     } catch (err) {
@@ -94,6 +119,42 @@ export function createApp({ config, users, challenges, invoices, invoiceStore, n
       return c.json(lnurlError("could not create invoice"));
     }
   });
+
+  if (sparkWebhook) {
+    app.post(
+      SPARK_WEBHOOK_PATH,
+      bodyLimit({ maxSize: MAX_WEBHOOK_BODY_BYTES, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+      async (c) => {
+        // Verify the exact bytes Spark signed, before parsing.
+        const raw = new Uint8Array(await c.req.arrayBuffer());
+        if (!signatureMatches(raw, c.req.header("x-spark-signature"), sparkWebhook.secret)) {
+          return c.json({ error: "invalid signature" }, 401);
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(new TextDecoder().decode(raw));
+        } catch {
+          return c.json({ error: "invalid json" }, 400);
+        }
+        const id = receiveRequestIdFrom(payload);
+        if (!id) {
+          // Acknowledge, so Spark doesn't retry something we'll never understand; polling still covers it.
+          const keys = payload && typeof payload === "object" ? Object.keys(payload).join(",") : typeof payload;
+          console.warn(`ignoring a Spark webhook without a receive request (keys: ${keys})`);
+          return c.json({ ok: true });
+        }
+        try {
+          for (const candidate of receiveRequestIdCandidates(id)) {
+            if (await sparkWebhook.checkSoon(candidate)) break;
+          }
+        } catch (err) {
+          console.error("spark webhook handling failed:", err);
+          return c.json({ error: "try again later" }, 503);
+        }
+        return c.json({ ok: true });
+      },
+    );
+  }
 
   return app;
 }

@@ -52,6 +52,14 @@ export class MysqlInvoiceStore implements InvoiceStore {
     return rows[0] ? this.toInvoice(rows[0]) : undefined;
   }
 
+  async getByReceiveRequestId(receiveRequestId: string): Promise<Invoice | undefined> {
+    const [rows] = await this.pool.execute<InvoiceRecord[]>(
+      `SELECT ${COLUMNS} FROM invoices WHERE receive_request_id = ? LIMIT 1`,
+      [receiveRequestId],
+    );
+    return rows[0] ? this.toInvoice(rows[0]) : undefined;
+  }
+
   async due(now: number, limit: number): Promise<Invoice[]> {
     const [rows] = await this.pool.execute<InvoiceRecord[]>(
       `SELECT ${COLUMNS} FROM invoices WHERE status = 'pending' AND next_check_at <= ? ORDER BY next_check_at LIMIT ${Math.trunc(limit)}`,

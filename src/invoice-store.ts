@@ -30,6 +30,7 @@ export interface InvoiceStore {
   /** Fails if the user doesn't exist or the payment hash is already stored. */
   create(invoice: NewInvoice, firstCheckAt: number): Promise<void>;
   get(paymentHash: string): Promise<Invoice | undefined>;
+  getByReceiveRequestId(receiveRequestId: string): Promise<Invoice | undefined>;
   /** Pending invoices whose next status check is due, earliest first. */
   due(now: number, limit: number): Promise<Invoice[]>;
   reschedule(paymentHash: string, nextCheckAt: number): Promise<void>;

@@ -6,12 +6,17 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const DAY = 24 * 60 * MINUTE;
 
-/** Check often while a payer is most likely to pay, then back off. */
-export function nextCheckDelay(ageMs: number): number {
+export type CheckSchedule = (ageMs: number) => number;
+
+/** Without webhooks: check often while a payer is most likely to pay, then back off. */
+export const nextCheckDelay: CheckSchedule = (ageMs) => {
   if (ageMs < 2 * MINUTE) return 3 * SECOND;
   if (ageMs < 15 * MINUTE) return 15 * SECOND;
   return MINUTE;
-}
+};
+
+/** With webhooks, polling only catches missed deliveries, so it can be much slower. */
+export const backstopCheckDelay: CheckSchedule = (ageMs) => (ageMs < 2 * MINUTE ? 30 * SECOND : 2 * MINUTE);
 
 export const FIRST_CHECK_DELAY_MS = nextCheckDelay(0);
 
@@ -38,11 +43,13 @@ export interface SettlementOptions {
   retryDelayMs?: number;
   /** How long expired, unpaid invoices are kept after their expiry time. */
   expiredRetentionMs?: number;
+  schedule?: CheckSchedule;
 }
 
 /**
  * Polls Spark for every pending invoice until it is paid or expires, and deletes rows once they are no
  * longer needed. Pending rows are never deleted, so an invoice whose status can't be fetched is never lost.
+ * A Spark webhook can bring an invoice's next check forward with `checkSoon`; polling stays on as the backstop.
  */
 export class SettlementWatcher {
   private readonly listeners: SettledListener[] = [];
@@ -54,6 +61,7 @@ export class SettlementWatcher {
   private readonly retryDelayMs: number;
   private readonly expiredRetentionMs: number;
   private readonly settledRetentionMs: number;
+  private readonly schedule: CheckSchedule;
   private timers: NodeJS.Timeout[] = [];
   private readonly inFlight = new Set<Promise<unknown>>();
   private stopped = true;
@@ -67,6 +75,19 @@ export class SettlementWatcher {
     this.retryDelayMs = options.retryDelayMs ?? 30 * SECOND;
     this.expiredRetentionMs = options.expiredRetentionMs ?? 10 * MINUTE;
     this.settledRetentionMs = options.retentionDays * DAY;
+    this.schedule = options.schedule ?? nextCheckDelay;
+  }
+
+  get firstCheckDelayMs(): number {
+    return this.schedule(0);
+  }
+
+  /** Makes a pending invoice due now; the check still verifies with Spark, so a forged call settles nothing. */
+  async checkSoon(receiveRequestId: string): Promise<boolean> {
+    const invoice = await this.options.store.getByReceiveRequestId(receiveRequestId);
+    if (invoice?.status !== "pending") return false;
+    await this.options.store.reschedule(invoice.paymentHash, this.now());
+    return true;
   }
 
   /** Called once per invoice, after it is stored as settled. */
@@ -152,7 +173,7 @@ export class SettlementWatcher {
     if (now > invoice.expiresAt + this.expiryGraceMs) {
       await store.markExpired(invoice.paymentHash);
     } else {
-      await store.reschedule(invoice.paymentHash, now + nextCheckDelay(now - invoice.createdAt));
+      await store.reschedule(invoice.paymentHash, now + this.schedule(now - invoice.createdAt));
     }
   }
 

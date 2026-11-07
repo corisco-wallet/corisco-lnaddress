@@ -8,7 +8,7 @@ import { createSparkLightning } from "./invoices";
 import { runMigrations } from "./migrations";
 import { MysqlInvoiceStore } from "./mysql-invoice-store";
 import { MysqlUserStore } from "./mysql-store";
-import { SettlementWatcher } from "./settlement";
+import { SettlementWatcher, backstopCheckDelay, nextCheckDelay } from "./settlement";
 
 const config = loadConfig();
 const pool = createPool({
@@ -29,10 +29,45 @@ await users.verifyKey();
 const invoiceStore = new MysqlInvoiceStore(pool, cipher);
 
 const spark = await createSparkLightning(config.serverMnemonic, config.network);
-const settlement = new SettlementWatcher({ store: invoiceStore, source: spark, retentionDays: config.invoiceRetentionDays });
+
+/** A fresh hostname may not resolve on Spark's side yet, so retry a few times before giving up on webhooks. */
+async function registerWebhook({ url, secret }: { url: string; secret: string }): Promise<boolean> {
+  for (const waitMs of [0, 5_000, 15_000, 45_000]) {
+    if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    try {
+      await spark.registerWebhook(url, secret);
+      return true;
+    } catch (err) {
+      console.error("spark webhook registration failed:", err);
+    }
+  }
+  return false;
+}
+
+const webhookActive = config.sparkWebhook ? await registerWebhook(config.sparkWebhook) : false;
+if (config.sparkWebhook && !webhookActive) console.warn("spark webhook unavailable; polling for settlement instead");
+
+const settlement = new SettlementWatcher({
+  store: invoiceStore,
+  source: spark,
+  retentionDays: config.invoiceRetentionDays,
+  schedule: webhookActive ? backstopCheckDelay : nextCheckDelay,
+});
 settlement.start();
 
-const app = createApp({ config, users, challenges: new ChallengeStore(), invoices: spark, invoiceStore });
+const app = createApp({
+  config,
+  users,
+  challenges: new ChallengeStore(),
+  invoices: spark,
+  invoiceStore,
+  firstCheckDelayMs: settlement.firstCheckDelayMs,
+  // The route stays up even if registration failed, so deliveries to an earlier registration still land.
+  sparkWebhook: config.sparkWebhook && {
+    secret: config.sparkWebhook.secret,
+    checkSoon: (id) => settlement.checkSoon(id),
+  },
+});
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => console.log(`listening on :${port}`));
 

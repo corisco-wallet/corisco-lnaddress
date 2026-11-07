@@ -35,7 +35,7 @@ export function sign(secretKey: Uint8Array, nonce: string, format: "compact" | "
   return bytesToHex(sig);
 }
 
-export function buildTestApp() {
+export function buildTestApp(extra: Partial<Parameters<typeof createApp>[0]> = {}) {
   const created: InvoiceRequest[] = [];
   const users = new MemoryUserStore();
   const challenges = new ChallengeStore();
@@ -57,6 +57,7 @@ export function buildTestApp() {
         };
       },
     },
+    ...extra,
   });
   return { app, users, challenges, created, invoiceStore };
 }

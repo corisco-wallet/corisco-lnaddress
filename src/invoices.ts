@@ -1,5 +1,6 @@
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import type { Network } from "./config";
+import { RECEIVE_FINISHED } from "./spark-webhook";
 
 export interface InvoiceRequest {
   amountSats: number;
@@ -29,6 +30,13 @@ export interface ReceiveStatus {
   preimage: string | null;
 }
 
+type WebhookEventType = Parameters<SparkWallet["registerSparkWalletWebhook"]>[0]["event_types"][number];
+
+export interface WebhookRegistrar {
+  /** Re-registering a URL only updates it, so this is safe on every start. */
+  registerWebhook(url: string, secret: string): Promise<void>;
+}
+
 export interface ReceiveStatusSource {
   /** `null` when Spark doesn't know the request. */
   getReceiveStatus(receiveRequestId: string): Promise<ReceiveStatus | null>;
@@ -48,7 +56,7 @@ export function isSettledStatus(status: string): boolean {
 export async function createSparkLightning(
   mnemonic: string,
   network: Network,
-): Promise<InvoiceCreator & ReceiveStatusSource> {
+): Promise<InvoiceCreator & ReceiveStatusSource & WebhookRegistrar> {
   const { wallet } = await SparkWallet.initialize({ mnemonicOrSeed: mnemonic, options: { network } });
   return {
     async createInvoice(request) {
@@ -66,6 +74,16 @@ export async function createSparkLightning(
       const request = await wallet.getLightningReceiveRequest(receiveRequestId);
       if (!request) return null;
       return { settled: isSettledStatus(request.status), preimage: request.paymentPreimage?.toLowerCase() ?? null };
+    },
+
+    // On the wallet that creates the invoices: Spark notifies it even though the receiver is the user's key.
+    async registerWebhook(url, secret) {
+      const result = await wallet.registerSparkWalletWebhook({
+        url,
+        secret,
+        event_types: [RECEIVE_FINISHED as WebhookEventType],
+      });
+      if (!result?.webhook_id) throw new Error("Spark did not confirm the webhook registration");
     },
   };
 }

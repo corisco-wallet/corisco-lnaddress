@@ -21,6 +21,11 @@ export class MemoryInvoiceStore implements InvoiceStore {
     return row && { ...row.invoice };
   }
 
+  async getByReceiveRequestId(receiveRequestId: string) {
+    const row = [...this.rows.values()].find((r) => r.invoice.receiveRequestId === receiveRequestId);
+    return row && { ...row.invoice };
+  }
+
   async due(now: number, limit: number) {
     return [...this.rows.values()]
       .filter((row) => row.invoice.status === "pending" && row.nextCheckAt <= now)
