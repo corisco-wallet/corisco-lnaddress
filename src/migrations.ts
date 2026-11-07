@@ -33,15 +33,11 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       settled_at BIGINT NULL,
       next_check_at BIGINT NOT NULL,
       CONSTRAINT fk_invoices_user FOREIGN KEY (user_id) REFERENCES users (id),
+      CONSTRAINT uq_invoices_receive_request UNIQUE (receive_request_id),
       INDEX idx_invoices_due (status, next_check_at),
       INDEX idx_invoices_expires (status, expires_at),
       INDEX idx_invoices_settled (status, settled_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  },
-  {
-    // Spark webhooks name the receive request, not the payment hash.
-    id: "003-index-invoice-receive-request",
-    sql: "CREATE INDEX idx_invoices_receive_request ON invoices (receive_request_id)",
   },
 ];
 

@@ -134,6 +134,28 @@ describe("SettlementWatcher", () => {
     expect(await store.due(90 * MINUTE + 30_000, 10)).toHaveLength(1);
   });
 
+  it("expires an invoice whose lookups keep failing a day after its expiry", async () => {
+    const { watcher, store, statuses, log, at } = await setup();
+    statuses.set("req", new Error("unknown receive request"));
+    at(60 * MINUTE + DAY);
+    await watcher.poll();
+    expect((await store.get(HASH))?.status).toBe("pending");
+    at(60 * MINUTE + DAY + 30_000);
+    await watcher.poll();
+    expect((await store.get(HASH))?.status).toBe("expired");
+    expect(log.warn).toHaveBeenCalled();
+  });
+
+  it("switches schedule for checks scheduled afterwards", async () => {
+    const { watcher, store, at } = await setup();
+    watcher.useSchedule(backstopCheckDelay);
+    expect(watcher.firstCheckDelayMs).toBe(30_000);
+    at(3_000);
+    await watcher.poll();
+    expect(await store.due(33_000 - 1, 10)).toHaveLength(0);
+    expect(await store.due(33_000, 10)).toHaveLength(1);
+  });
+
   it("keeps going when a listener throws", async () => {
     const { watcher, store, statuses, log, at } = await setup();
     watcher.onSettled(() => {
@@ -220,7 +242,7 @@ describe("SettlementWatcher", () => {
     expect((await store.get(HASH))?.status).toBe("settled");
     expect(settled).toHaveLength(1);
 
-    expect(await watcher.checkSoon("req")).toBe(false);
+    expect(await watcher.checkSoon("req")).toBe(true);
     expect(await watcher.checkSoon("unknown")).toBe(false);
   });
 

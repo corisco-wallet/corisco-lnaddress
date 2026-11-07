@@ -9,6 +9,7 @@ export class MemoryInvoiceStore implements InvoiceStore {
   async create(invoice: NewInvoice, firstCheckAt: number) {
     if (!(await this.users.getByUsername(invoice.username))) throw new Error("cannot store an invoice for an unknown user");
     if (this.rows.has(invoice.paymentHash)) throw new Error("duplicate payment hash");
+    if (await this.getByReceiveRequestId(invoice.receiveRequestId)) throw new Error("duplicate receive request id");
     const { username: _username, ...rest } = invoice;
     this.rows.set(invoice.paymentHash, {
       invoice: { ...rest, status: "pending", preimage: null, settledAt: null },

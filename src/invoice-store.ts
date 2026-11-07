@@ -27,7 +27,7 @@ export interface Invoice {
 }
 
 export interface InvoiceStore {
-  /** Fails if the user doesn't exist or the payment hash is already stored. */
+  /** Fails if the user doesn't exist or the payment hash or receive request id is already stored. */
   create(invoice: NewInvoice, firstCheckAt: number): Promise<void>;
   get(paymentHash: string): Promise<Invoice | undefined>;
   getByReceiveRequestId(receiveRequestId: string): Promise<Invoice | undefined>;

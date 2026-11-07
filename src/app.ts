@@ -23,14 +23,15 @@ export interface Deps {
   challenges: ChallengeStore;
   invoices: InvoiceCreator;
   invoiceStore: InvoiceStore;
-  /** Must match the settlement watcher's schedule. */
-  firstCheckDelayMs?: number;
+  /** Must match the settlement watcher's current schedule. */
+  firstCheckDelayMs?: () => number;
   sparkWebhook?: SparkWebhookDeps;
   now?: () => number;
 }
 
 export interface SparkWebhookDeps {
   secret: string;
+  /** Returns false if no invoice has this receive request id. */
   checkSoon(receiveRequestId: string): Promise<boolean>;
 }
 
@@ -42,7 +43,7 @@ export function createApp({
   challenges,
   invoices,
   invoiceStore,
-  firstCheckDelayMs = FIRST_CHECK_DELAY_MS,
+  firstCheckDelayMs = () => FIRST_CHECK_DELAY_MS,
   sparkWebhook,
   now = Date.now,
 }: Deps): Hono {
@@ -111,7 +112,7 @@ export function createApp({
           createdAt,
           expiresAt: invoice.expiresAt,
         },
-        createdAt + firstCheckDelayMs,
+        createdAt + firstCheckDelayMs(),
       );
       return c.json({ pr: invoice.pr, successAction: null, disposable: false, routes: [] });
     } catch (err) {
@@ -144,9 +145,11 @@ export function createApp({
           return c.json({ ok: true });
         }
         try {
+          let known = false;
           for (const candidate of receiveRequestIdCandidates(id)) {
-            if (await sparkWebhook.checkSoon(candidate)) break;
+            if ((known = await sparkWebhook.checkSoon(candidate))) break;
           }
+          if (!known) console.warn(`ignoring a Spark webhook for an unknown receive request: ${id}`);
         } catch (err) {
           console.error("spark webhook handling failed:", err);
           return c.json({ error: "try again later" }, 503);

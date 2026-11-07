@@ -44,14 +44,11 @@ async function registerWebhook({ url, secret }: { url: string; secret: string })
   return false;
 }
 
-const webhookActive = config.sparkWebhook ? await registerWebhook(config.sparkWebhook) : false;
-if (config.sparkWebhook && !webhookActive) console.warn("spark webhook unavailable; polling for settlement instead");
-
 const settlement = new SettlementWatcher({
   store: invoiceStore,
   source: spark,
   retentionDays: config.invoiceRetentionDays,
-  schedule: webhookActive ? backstopCheckDelay : nextCheckDelay,
+  schedule: nextCheckDelay,
 });
 settlement.start();
 
@@ -61,7 +58,7 @@ const app = createApp({
   challenges: new ChallengeStore(),
   invoices: spark,
   invoiceStore,
-  firstCheckDelayMs: settlement.firstCheckDelayMs,
+  firstCheckDelayMs: () => settlement.firstCheckDelayMs,
   // The route stays up even if registration failed, so deliveries to an earlier registration still land.
   sparkWebhook: config.sparkWebhook && {
     secret: config.sparkWebhook.secret,
@@ -71,10 +68,17 @@ const app = createApp({
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => console.log(`listening on :${port}`));
 
+// Register only once listening, since Spark may call the URL while registering; poll quickly until then.
+if (config.sparkWebhook) {
+  void registerWebhook(config.sparkWebhook).then((active) => {
+    if (active) settlement.useSchedule(backstopCheckDelay);
+    else console.warn("spark webhook unavailable; polling for settlement instead");
+  });
+}
+
 process.on("SIGTERM", () => {
-  server.close();
-  void settlement
-    .stop()
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  void Promise.all([closed, settlement.stop()])
     .then(() => users.close())
     .finally(() => process.exit(0));
 });

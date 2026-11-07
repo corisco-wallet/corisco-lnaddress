@@ -54,7 +54,7 @@ export class MysqlInvoiceStore implements InvoiceStore {
 
   async getByReceiveRequestId(receiveRequestId: string): Promise<Invoice | undefined> {
     const [rows] = await this.pool.execute<InvoiceRecord[]>(
-      `SELECT ${COLUMNS} FROM invoices WHERE receive_request_id = ? LIMIT 1`,
+      `SELECT ${COLUMNS} FROM invoices WHERE receive_request_id = ?`,
       [receiveRequestId],
     );
     return rows[0] ? this.toInvoice(rows[0]) : undefined;

@@ -41,6 +41,8 @@ export interface SettlementOptions {
   expiryGraceMs?: number;
   /** Delay before re-checking an invoice whose status lookup failed. */
   retryDelayMs?: number;
+  /** How long after expiry an invoice whose lookups keep failing is still retried before it is expired. */
+  failedLookupCutoffMs?: number;
   /** How long expired, unpaid invoices are kept after their expiry time. */
   expiredRetentionMs?: number;
   schedule?: CheckSchedule;
@@ -48,7 +50,8 @@ export interface SettlementOptions {
 
 /**
  * Polls Spark for every pending invoice until it is paid or expires, and deletes rows once they are no
- * longer needed. Pending rows are never deleted, so an invoice whose status can't be fetched is never lost.
+ * longer needed. Pending rows are never deleted, and an invoice whose status can't be fetched stays pending
+ * until well past its expiry, so an outage doesn't lose a payment.
  * A Spark webhook can bring an invoice's next check forward with `checkSoon`; polling stays on as the backstop.
  */
 export class SettlementWatcher {
@@ -59,9 +62,10 @@ export class SettlementWatcher {
   private readonly concurrency: number;
   private readonly expiryGraceMs: number;
   private readonly retryDelayMs: number;
+  private readonly failedLookupCutoffMs: number;
   private readonly expiredRetentionMs: number;
   private readonly settledRetentionMs: number;
-  private readonly schedule: CheckSchedule;
+  private schedule: CheckSchedule;
   private timers: NodeJS.Timeout[] = [];
   private readonly inFlight = new Set<Promise<unknown>>();
   private stopped = true;
@@ -73,6 +77,7 @@ export class SettlementWatcher {
     this.concurrency = options.concurrency ?? 4;
     this.expiryGraceMs = options.expiryGraceMs ?? 2 * MINUTE;
     this.retryDelayMs = options.retryDelayMs ?? 30 * SECOND;
+    this.failedLookupCutoffMs = options.failedLookupCutoffMs ?? DAY;
     this.expiredRetentionMs = options.expiredRetentionMs ?? 10 * MINUTE;
     this.settledRetentionMs = options.retentionDays * DAY;
     this.schedule = options.schedule ?? nextCheckDelay;
@@ -82,11 +87,19 @@ export class SettlementWatcher {
     return this.schedule(0);
   }
 
-  /** Makes a pending invoice due now; the check still verifies with Spark, so a forged call settles nothing. */
+  /** Applies to checks scheduled from now on. */
+  useSchedule(schedule: CheckSchedule): void {
+    this.schedule = schedule;
+  }
+
+  /**
+   * Makes a pending invoice due now; the check still verifies with Spark, so a forged call settles nothing.
+   * Returns false if no invoice has this receive request id.
+   */
   async checkSoon(receiveRequestId: string): Promise<boolean> {
     const invoice = await this.options.store.getByReceiveRequestId(receiveRequestId);
-    if (invoice?.status !== "pending") return false;
-    await this.options.store.reschedule(invoice.paymentHash, this.now());
+    if (!invoice) return false;
+    if (invoice.status === "pending") await this.options.store.reschedule(invoice.paymentHash, this.now());
     return true;
   }
 
@@ -154,7 +167,13 @@ export class SettlementWatcher {
       status = await source.getReceiveStatus(invoice.receiveRequestId);
     } catch (err) {
       this.log.error("invoice status lookup failed:", err);
-      await store.reschedule(invoice.paymentHash, this.now() + this.retryDelayMs);
+      const now = this.now();
+      if (now > invoice.expiresAt + this.failedLookupCutoffMs) {
+        this.log.warn("giving up on an invoice whose status lookups kept failing long after it expired");
+        await store.markExpired(invoice.paymentHash);
+      } else {
+        await store.reschedule(invoice.paymentHash, now + this.retryDelayMs);
+      }
       return;
     }
     const now = this.now();

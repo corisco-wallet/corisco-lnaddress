@@ -51,7 +51,7 @@ describe.skipIf(!url)("MySQL", () => {
         await other.end();
       }
       const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM schema_migrations");
-      expect(rows.map((r) => r.id)).toEqual(["001-create-users", "002-create-invoices", "003-index-invoice-receive-request"]);
+      expect(rows.map((r) => r.id)).toEqual(["001-create-users", "002-create-invoices"]);
     });
   });
 

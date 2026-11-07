@@ -11,7 +11,7 @@ const PREIMAGE = "0f".repeat(32);
 
 export const newInvoice = (overrides: Partial<NewInvoice> = {}): NewInvoice => ({
   paymentHash: HASH_A,
-  receiveRequestId: "spark-request-a",
+  receiveRequestId: `spark-request-${overrides.paymentHash ?? "a"}`,
   username: USERNAME,
   amountMsat: 21_000,
   pr: "lnbcrt210n1-test-invoice-a",
@@ -64,6 +64,12 @@ export function describeInvoiceStore(name: string, create: () => Promise<{ store
       await store.create(newInvoice({ paymentHash: HASH_B, receiveRequestId: "spark-request-b" }), 4_000);
       expect((await store.getByReceiveRequestId("spark-request-b"))?.paymentHash).toBe(HASH_B);
       expect(await store.getByReceiveRequestId("spark-request-z")).toBeUndefined();
+    });
+
+    it("refuses a receive request id it already has", async () => {
+      await store.create(newInvoice({ paymentHash: HASH_A, receiveRequestId: "spark-request-a" }), 4_000);
+      await expect(store.create(newInvoice({ paymentHash: HASH_B, receiveRequestId: "spark-request-a" }), 4_000)).rejects.toThrow();
+      expect(await store.get(HASH_B)).toBeUndefined();
     });
 
     it("lists due pending invoices, earliest check first, up to the limit", async () => {

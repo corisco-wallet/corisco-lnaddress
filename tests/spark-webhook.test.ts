@@ -56,6 +56,15 @@ describe("Spark webhook route", () => {
     expect(checkSoon).not.toHaveBeenCalled();
   });
 
+  it("tries the bare id when the prefixed one is unknown, and warns when neither matches", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { post, checkSoon } = setup(vi.fn(async () => false));
+    expect((await post(JSON.stringify(receive()))).status).toBe(200);
+    expect(checkSoon.mock.calls).toEqual([[`SparkLightningReceiveRequest:${UUID}`], [UUID]]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(UUID));
+    warn.mockRestore();
+  });
+
   it("asks Spark to retry when the invoice can't be updated", async () => {
     const { post } = setup(vi.fn(async () => Promise.reject(new Error("db down"))));
     vi.spyOn(console, "error").mockImplementation(() => {});
