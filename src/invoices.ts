@@ -42,10 +42,7 @@ export interface ReceiveStatusSource {
   getReceiveStatus(receiveRequestId: string): Promise<ReceiveStatus | null>;
 }
 
-/**
- * Spark statuses that mean the Lightning payment reached the receiver. Everything else, including
- * statuses added later (FUTURE_VALUE), counts as not paid yet; an invoice that never gets here expires.
- */
+// Spark statuses meaning the payment arrived; anything else, including future enum values, counts as unpaid.
 const SETTLED_STATUSES = new Set(["LIGHTNING_PAYMENT_RECEIVED", "TRANSFER_CREATED", "TRANSFER_COMPLETED"]);
 
 export function isSettledStatus(status: string): boolean {

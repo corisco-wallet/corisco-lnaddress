@@ -48,12 +48,7 @@ export interface SettlementOptions {
   schedule?: CheckSchedule;
 }
 
-/**
- * Polls Spark for every pending invoice until it is paid or expires, and deletes rows once they are no
- * longer needed. Pending rows are never deleted, and an invoice whose status can't be fetched stays pending
- * until well past its expiry, so an outage doesn't lose a payment.
- * A Spark webhook can bring an invoice's next check forward with `checkSoon`; polling stays on as the backstop.
- */
+/** Polls Spark for pending invoices until each is paid or expires; `checkSoon` lets a webhook bring a check forward. */
 export class SettlementWatcher {
   private readonly listeners: SettledListener[] = [];
   private readonly now: () => number;
