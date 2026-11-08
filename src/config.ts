@@ -1,4 +1,5 @@
 import { parseDataKey } from "./crypto";
+import { SPARK_WEBHOOK_PATH } from "./spark-webhook";
 
 export type Network = "REGTEST" | "MAINNET";
 
@@ -19,6 +20,9 @@ export interface Config {
   dataKey: Buffer;
   serverMnemonic: string;
   maxSendableSats: number;
+  /** How long paid invoices are kept, for payment status lookups. */
+  invoiceRetentionDays: number;
+  sparkWebhook?: { url: string; secret: string };
 }
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
@@ -41,6 +45,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const maxSendableSats = Number(env.MAX_SENDABLE_SATS ?? 1_000_000);
   if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be a positive integer");
   if (!Number.isInteger(maxSendableSats) || maxSendableSats < 1) throw new Error("MAX_SENDABLE_SATS must be a positive integer");
+  const invoiceRetentionDays = Number(env.INVOICE_RETENTION_DAYS?.trim() || 7);
+  if (!Number.isInteger(invoiceRetentionDays) || invoiceRetentionDays < 1) {
+    throw new Error("INVOICE_RETENTION_DAYS must be a positive integer");
+  }
+  const webhookSecret = env.SPARK_WEBHOOK_SECRET?.trim();
+  if (webhookSecret) {
+    if (webhookSecret.length < 32) throw new Error("SPARK_WEBHOOK_SECRET must be at least 32 characters");
+    if (!publicBaseUrl.startsWith("https://")) throw new Error("SPARK_WEBHOOK_SECRET needs an https PUBLIC_BASE_URL");
+  }
   return {
     port,
     network,
@@ -56,5 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataKey: parseDataKey(required(env, "DATA_ENCRYPTION_KEY")),
     serverMnemonic: required(env, "SERVER_MNEMONIC"),
     maxSendableSats,
+    invoiceRetentionDays,
+    sparkWebhook: webhookSecret ? { url: publicBaseUrl + SPARK_WEBHOOK_PATH, secret: webhookSecret } : undefined,
   };
 }

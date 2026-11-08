@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildMetadata, descriptionHash } from "../src/lnurl";
-import { DOMAIN, buildTestApp, newKeypair, register } from "./helpers";
+import { DOMAIN, TEST_NOW, TEST_PAYMENT_HASH, buildTestApp, newKeypair, register } from "./helpers";
 
 async function registered() {
   const ctx = buildTestApp();
@@ -42,6 +42,33 @@ describe("GET /lnurl/callback/:username", () => {
         expirySeconds: 3600,
       },
     ]);
+  });
+
+  it("stores every invoice it hands out", async () => {
+    const { app, invoiceStore, username } = await registered();
+    await app.request(`/lnurl/callback/${username}?amount=5000000`);
+    expect(await invoiceStore.get(TEST_PAYMENT_HASH)).toEqual({
+      paymentHash: TEST_PAYMENT_HASH,
+      receiveRequestId: "spark-request-1",
+      amountMsat: 5_000_000,
+      pr: "lnbcrt-test-invoice",
+      status: "pending",
+      preimage: null,
+      createdAt: TEST_NOW,
+      expiresAt: TEST_NOW + 3_600_000,
+      settledAt: null,
+    });
+    expect(await invoiceStore.due(TEST_NOW + 2_999, 10)).toHaveLength(0);
+    expect(await invoiceStore.due(TEST_NOW + 3_000, 10)).toHaveLength(1);
+  });
+
+  it("does not return an invoice it could not store", async () => {
+    const { app, invoiceStore, username } = await registered();
+    invoiceStore.create = async () => {
+      throw new Error("database down");
+    };
+    const body = await (await app.request(`/lnurl/callback/${username}?amount=5000000`)).json();
+    expect(body).toEqual({ status: "ERROR", reason: "could not create invoice" });
   });
 
   it.each([["missing", ""], ["fractional sats", "?amount=1500"], ["below min", "?amount=0"], ["above max", "?amount=100001000"], ["not a number", "?amount=abc"]])(

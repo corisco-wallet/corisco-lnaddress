@@ -6,7 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDataCipher } from "../src/crypto";
 import { migrateSqliteToMysql } from "../scripts/migrate-sqlite-to-mysql";
 import { runMigrations } from "../src/migrations";
+import { MysqlInvoiceStore } from "../src/mysql-invoice-store";
 import { MysqlUserStore } from "../src/mysql-store";
+import { HASH_A, describeInvoiceStore, newInvoice } from "./invoice-store-contract";
 import { createLegacyDb, LEGACY_PUBKEY_A, LEGACY_PUBKEY_B } from "./legacy-fixture";
 import { describeUserStore } from "./store-contract";
 
@@ -17,8 +19,15 @@ const cipher = createDataCipher(Buffer.alloc(32, 9));
 describe.skipIf(!url)("MySQL", () => {
   let pool: Pool;
 
+  // TRUNCATE isn't allowed on a table other tables reference, so empty them in order.
+  const clearTables = async () => {
+    await pool.query("DELETE FROM invoices");
+    await pool.query("DELETE FROM users");
+  };
+
   beforeAll(async () => {
     pool = createPool(url!);
+    await pool.query("DROP TABLE IF EXISTS invoices");
     await pool.query("DROP TABLE IF EXISTS users");
     await pool.query("DROP TABLE IF EXISTS schema_migrations");
     await runMigrations(pool);
@@ -29,7 +38,7 @@ describe.skipIf(!url)("MySQL", () => {
   });
 
   describeUserStore("MySQL", async () => {
-    await pool.query("TRUNCATE TABLE users");
+    await clearTables();
     return { store: new MysqlUserStore(pool, cipher) };
   });
 
@@ -42,13 +51,13 @@ describe.skipIf(!url)("MySQL", () => {
         await other.end();
       }
       const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM schema_migrations");
-      expect(rows.map((r) => r.id)).toEqual(["001-create-users"]);
+      expect(rows.map((r) => r.id)).toEqual(["001-create-users", "002-create-invoices"]);
     });
   });
 
   describe("encryption at rest", () => {
     it("stores neither the username nor the pubkey in readable form", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       const store = new MysqlUserStore(pool, cipher);
       const pubkey = "02" + "cd".repeat(32);
       await store.getOrCreate(pubkey, () => "very-visible-name-1");
@@ -61,7 +70,7 @@ describe.skipIf(!url)("MySQL", () => {
     });
 
     it("refuses a row whose encrypted pubkey was swapped for another user's", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       const store = new MysqlUserStore(pool, cipher);
       await store.getOrCreate(LEGACY_PUBKEY_A, () => "alice-name-001");
       await store.getOrCreate(LEGACY_PUBKEY_B, () => "bob-name-002");
@@ -72,7 +81,7 @@ describe.skipIf(!url)("MySQL", () => {
     });
 
     it("refuses a row whose lookup hash was moved to another user", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       const store = new MysqlUserStore(pool, cipher);
       await store.getOrCreate(LEGACY_PUBKEY_A, () => "alice-name-001");
       const forged = cipher.lookupHash("username", "mallory-name-9");
@@ -81,7 +90,7 @@ describe.skipIf(!url)("MySQL", () => {
     });
 
     it("verifyKey accepts the right key and an empty table, and refuses a wrong key", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       await expect(new MysqlUserStore(pool, cipher).verifyKey()).resolves.toBeUndefined();
       await new MysqlUserStore(pool, cipher).getOrCreate(LEGACY_PUBKEY_A, () => "alice-name-001");
       await expect(new MysqlUserStore(pool, cipher).verifyKey()).resolves.toBeUndefined();
@@ -89,7 +98,7 @@ describe.skipIf(!url)("MySQL", () => {
     });
 
     it("cannot be read with a different key", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       await new MysqlUserStore(pool, cipher).getOrCreate(LEGACY_PUBKEY_A, () => "alice-name-001");
       const otherKey = new MysqlUserStore(pool, createDataCipher(Buffer.alloc(32, 10)));
       expect(await otherKey.getByUsername("alice-name-001")).toBeUndefined();
@@ -99,7 +108,7 @@ describe.skipIf(!url)("MySQL", () => {
 
   describe("SQLite migration script", () => {
     it("moves every user across, encrypted, and is safe to run again", async () => {
-      await pool.query("TRUNCATE TABLE users");
+      await clearTables();
       const dir = mkdtempSync(join(tmpdir(), "lnaddress-legacy-"));
       try {
         const path = join(dir, "lnaddress.db");
@@ -116,6 +125,34 @@ describe.skipIf(!url)("MySQL", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describeInvoiceStore("MySQL", async () => {
+    await clearTables();
+    return { store: new MysqlInvoiceStore(pool, cipher), users: new MysqlUserStore(pool, cipher) };
+  });
+
+  describe("invoice encryption at rest", () => {
+    it("stores neither the invoice nor the preimage in readable form, and binds them to their row", async () => {
+      await clearTables();
+      const users = new MysqlUserStore(pool, cipher);
+      const store = new MysqlInvoiceStore(pool, cipher);
+      await users.getOrCreate("02" + "ab".repeat(32), () => "payee-name-001");
+      const preimage = "9c".repeat(32);
+      await store.create(newInvoice({ pr: "lnbcrt-very-visible-invoice" }), 0);
+      await store.markSettled(HASH_A, preimage, 5_000);
+
+      const [rows] = await pool.query<RowDataPacket[]>("SELECT pr_enc, preimage_enc FROM invoices");
+      const stored = Buffer.concat([Buffer.from(rows[0].pr_enc), Buffer.from(rows[0].preimage_enc)]);
+      expect(stored.includes(Buffer.from("lnbcrt-very-visible-invoice"))).toBe(false);
+      expect(stored.includes(Buffer.from(preimage))).toBe(false);
+      expect(stored.includes(Buffer.from(preimage, "hex"))).toBe(false);
+
+      const other = "d4".repeat(32);
+      await store.create(newInvoice({ paymentHash: other }), 0);
+      await pool.query("UPDATE invoices SET pr_enc = ? WHERE payment_hash = ?", [rows[0].pr_enc, Buffer.from(other, "hex")]);
+      await expect(store.get(other)).rejects.toThrow();
     });
   });
 });

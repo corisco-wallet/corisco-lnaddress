@@ -18,6 +18,27 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CONSTRAINT uq_pubkey_hash UNIQUE (pubkey_hash)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+  {
+    id: "002-create-invoices",
+    sql: `CREATE TABLE invoices (
+      payment_hash BINARY(32) NOT NULL PRIMARY KEY,
+      receive_request_id VARCHAR(128) NOT NULL,
+      user_id BIGINT UNSIGNED NOT NULL,
+      amount_msat BIGINT UNSIGNED NOT NULL,
+      pr_enc VARBINARY(4096) NOT NULL,
+      preimage_enc VARBINARY(128) NULL,
+      status ENUM('pending', 'settled', 'expired') NOT NULL DEFAULT 'pending',
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      settled_at BIGINT NULL,
+      next_check_at BIGINT NOT NULL,
+      CONSTRAINT fk_invoices_user FOREIGN KEY (user_id) REFERENCES users (id),
+      CONSTRAINT uq_invoices_receive_request UNIQUE (receive_request_id),
+      INDEX idx_invoices_due (status, next_check_at),
+      INDEX idx_invoices_expires (status, expires_at),
+      INDEX idx_invoices_settled (status, settled_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

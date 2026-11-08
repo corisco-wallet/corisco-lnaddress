@@ -5,6 +5,7 @@ import { registrationDigest } from "../src/auth";
 import { ChallengeStore } from "../src/challenge";
 import type { Config } from "../src/config";
 import type { InvoiceRequest } from "../src/invoices";
+import { MemoryInvoiceStore } from "./memory-invoice-store";
 import { MemoryUserStore } from "./memory-store";
 
 export const DOMAIN = "example.test";
@@ -18,7 +19,11 @@ export const config: Config = {
   dataKey: Buffer.alloc(32),
   serverMnemonic: "unused",
   maxSendableSats: 100_000,
+  invoiceRetentionDays: 7,
 };
+
+export const TEST_PAYMENT_HASH = "7e".repeat(32);
+export const TEST_NOW = 1_700_000_000_000;
 
 export function newKeypair() {
   const { secretKey, publicKey } = secp256k1.keygen();
@@ -30,22 +35,31 @@ export function sign(secretKey: Uint8Array, nonce: string, format: "compact" | "
   return bytesToHex(sig);
 }
 
-export function buildTestApp() {
+export function buildTestApp(extra: Partial<Parameters<typeof createApp>[0]> = {}) {
   const created: InvoiceRequest[] = [];
   const users = new MemoryUserStore();
   const challenges = new ChallengeStore();
+  const invoiceStore = new MemoryInvoiceStore(users);
   const app = createApp({
     config,
     users,
     challenges,
+    invoiceStore,
+    now: () => TEST_NOW,
     invoices: {
       async createInvoice(request) {
         created.push(request);
-        return "lnbcrt-test-invoice";
+        return {
+          pr: "lnbcrt-test-invoice",
+          paymentHash: TEST_PAYMENT_HASH,
+          receiveRequestId: "spark-request-1",
+          expiresAt: TEST_NOW + request.expirySeconds * 1000,
+        };
       },
     },
+    ...extra,
   });
-  return { app, users, challenges, created };
+  return { app, users, challenges, created, invoiceStore };
 }
 
 export async function register(app: ReturnType<typeof buildTestApp>["app"], pubkey: string, secretKey: Uint8Array) {
