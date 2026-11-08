@@ -5,7 +5,7 @@ const NONCE_LENGTH = 12;
 const TAG_LENGTH = 16;
 const HKDF_SALT = Buffer.from("corisco-lnaddress");
 
-export type Field = "username" | "pubkey" | "invoice" | "preimage";
+export type Field = "username" | "pubkey" | "invoice" | "preimage" | "zap_request" | "zap_receipt";
 
 export interface DataCipher {
   /** Deterministic keyed hash, so a row can be found without storing the plaintext. */

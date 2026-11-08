@@ -16,6 +16,7 @@ import {
   signatureMatches,
 } from "./spark-webhook";
 import { INVOICE_EXPIRY_SECONDS, MIN_SENDABLE_SATS, buildMetadata, descriptionHash, parseAmountMsats } from "./lnurl";
+import { type RelayPolicy, type ZapSigner, validateZapRequest } from "./zaps";
 
 export interface Deps {
   config: Config;
@@ -26,6 +27,7 @@ export interface Deps {
   /** Must match the settlement watcher's current schedule. */
   firstCheckDelayMs?: () => number;
   sparkWebhook?: SparkWebhookDeps;
+  zaps?: { signer: ZapSigner; policy: RelayPolicy };
   now?: () => number;
 }
 
@@ -45,6 +47,7 @@ export function createApp({
   invoiceStore,
   firstCheckDelayMs = () => FIRST_CHECK_DELAY_MS,
   sparkWebhook,
+  zaps,
   now = Date.now,
 }: Deps): Hono {
   const app = new Hono();
@@ -85,6 +88,7 @@ export function createApp({
       minSendable: MIN_SENDABLE_SATS * 1000,
       maxSendable: config.maxSendableSats * 1000,
       metadata: buildMetadata(user.username, config.domain),
+      ...(zaps && { allowsNostr: true, nostrPubkey: zaps.signer.keysFor(user.identityPubkey).pubkey }),
     });
   });
 
@@ -93,10 +97,18 @@ export function createApp({
     if (!user?.active) return c.json(lnurlError("unknown user"));
     const amount = parseAmountMsats(c.req.query("amount"), config.maxSendableSats);
     if ("error" in amount) return c.json(lnurlError(amount.error));
+    const zapRequest = c.req.query("nostr");
+    if (zapRequest !== undefined) {
+      if (!zaps) return c.json(lnurlError("nostr zaps are not supported"));
+      const receiptPubkey = zaps.signer.keysFor(user.identityPubkey).pubkey;
+      const zap = validateZapRequest(zapRequest, amount.sats * 1000, receiptPubkey, zaps.policy);
+      if ("error" in zap) return c.json(lnurlError(zap.error));
+    }
     try {
       const invoice = await invoices.createInvoice({
         amountSats: amount.sats,
-        descriptionHash: descriptionHash(buildMetadata(user.username, config.domain)),
+        // A zap invoice commits to the zap request itself (NIP-57), not to the LNURL metadata.
+        descriptionHash: descriptionHash(zapRequest ?? buildMetadata(user.username, config.domain)),
         receiverIdentityPubkey: user.identityPubkey,
         expirySeconds: INVOICE_EXPIRY_SECONDS,
       });
@@ -111,6 +123,7 @@ export function createApp({
           pr: invoice.pr,
           createdAt,
           expiresAt: invoice.expiresAt,
+          zapRequest,
         },
         createdAt + firstCheckDelayMs(),
       );

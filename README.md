@@ -38,6 +38,8 @@ whether it was paid:
 | Payment hash, Spark receive request id | Plain (the hash is public in the invoice; the id is needed to ask Spark for the status) |
 | Receiving user | The `users` row id, not the pubkey |
 | Amount, created/expiry/settled times, status | Plain |
+| Zap request and the published zap receipt (zaps only) | Encrypted |
+| Zap receipt state, attempts, next attempt time | Plain |
 
 Someone who can read the database but doesn't have the key can therefore see how many invoices each
 (anonymous) user row got, for how much, and when, but can't tell which address or wallet that row is.
@@ -45,7 +47,8 @@ Someone who can read the database but doesn't have the key can therefore see how
 Retention:
 
 - **Unpaid invoices** are deleted about 10 minutes after they expire.
-- **Paid invoices** are deleted `INVOICE_RETENTION_DAYS` (default 7) after payment.
+- **Paid invoices** are deleted `INVOICE_RETENTION_DAYS` (default 7) after payment, but a paid zap is kept
+  until its receipt is published or given up on.
 - An invoice whose status can't be checked (for example while Spark is unreachable) stays pending and is
   kept until a check succeeds, so a late payment is never missed.
 
@@ -59,6 +62,32 @@ A delivery whose `X-Spark-Signature` matches only makes that invoice due for a c
 itself still asks Spark and verifies the preimage, so a forged or replayed webhook can't mark anything
 paid. Polling keeps running as a backstop for missed deliveries, but slowly (30 s, then every 2 min).
 If registration fails at startup the server falls back to the normal polling schedule.
+
+## Nostr zaps (NIP-57)
+
+Set `NOSTR_SECRET_KEY` (an `nsec1…` or 64 hex characters) to accept zaps. Each address then advertises
+`allowsNostr: true` and a `nostrPubkey`, and the callback accepts a signed kind-9734 zap request in the
+`nostr` parameter. The request is checked per NIP-57 (signature, one `p` tag, at most one `e` tag, a
+matching `amount`, a `P` tag naming the receipt signer if present, and at least one usable relay), and
+the invoice's description hash is the SHA-256 of the zap request instead of the LNURL metadata.
+
+Once the invoice is paid, a kind-9735 receipt is signed and published to the relays the zap request lists
+(at most 10). It is retried with backoff (30 s, growing to hourly) until a relay accepts it, for up to 14
+days after payment. A paid zap is queued for its receipt in the same row update that marks it paid, so a
+restart never loses one.
+
+- **Each address has its own receipt key**, derived from `NOSTR_SECRET_KEY` and the user's identity pubkey,
+  so one user's receipts never validate for another address. **Never change `NOSTR_SECRET_KEY`**: clients
+  check receipts against the key an address advertises now, so a new key makes every past receipt invalid.
+- **Relays are chosen by the payer**, so on MAINNET only `wss://` relays on public addresses are dialled
+  (the resolved IP is checked too); REGTEST also allows `ws://` and local relays for development.
+- **Testing on regtest:** `npm run dev:zap` registers a fresh address, sends invalid and valid zap
+  requests, pays the invoice from `PAYER_MNEMONIC` and checks the receipt the way a client would. Point it
+  at a deployment with `BASE_URL=https://test.corisco.org LNADDRESS_DOMAIN=test.corisco.org`; the receipt
+  goes to `RELAY_URL` (default `wss://nos.lol`, with throwaway keys).
+- **Zaps are public.** A receipt tells anyone reading those relays that this address received an amount
+  at a given time, from the zap sender's Nostr key. That is how zaps work; payments without a zap request
+  publish nothing.
 
 Nothing about payers is stored, and the app's own log lines don't include usernames, pubkeys, invoices or
 amounts.

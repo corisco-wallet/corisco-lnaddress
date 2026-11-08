@@ -39,6 +39,16 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       INDEX idx_invoices_settled (status, settled_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   },
+  {
+    id: "003-add-zaps",
+    sql: `ALTER TABLE invoices
+      ADD COLUMN zap_request_enc BLOB NULL,
+      ADD COLUMN zap_receipt_enc BLOB NULL,
+      ADD COLUMN zap_state ENUM('pending', 'published', 'abandoned') NULL,
+      ADD COLUMN zap_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+      ADD COLUMN zap_next_attempt_at BIGINT NULL,
+      ADD INDEX idx_invoices_zap_due (zap_state, status, zap_next_attempt_at)`,
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {
