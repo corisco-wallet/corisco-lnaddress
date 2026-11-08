@@ -70,9 +70,39 @@ describe("relay policy", () => {
     expect(receiptRelays(event, PUBLIC)).toEqual(urls.slice(0, 10).map((u) => u + "/"));
   });
 
-  it("recognises private addresses", () => {
-    expect(["127.0.0.1", "192.168.0.10", "fd00::1", "fe80::1", "::ffff:10.0.0.1"].every(isPrivateAddress)).toBe(true);
-    expect(["8.8.8.8", "2606:4700::1111", "relay.example.com"].some(isPrivateAddress)).toBe(false);
+  it.each([
+    "127.0.0.1",
+    "192.168.0.10",
+    "192.0.0.8",
+    "198.18.0.1",
+    "fd00::1",
+    "fe80::1%eth0",
+    "::ffff:10.0.0.1",
+    "::ffff:a00:1",
+    "::10.0.0.1",
+    "64:ff9b::a00:5",
+    "64:ff9b::10.0.0.5",
+    "64:ff9b:1::1",
+    "2002:a00:1::1",
+    "2002:7f00:1::",
+    "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+  ])("treats %s as private", (address) => {
+    expect(isPrivateAddress(address)).toBe(true);
+  });
+
+  it.each(["8.8.8.8", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::1", "::ffff:8.8.8.8", "relay.example.com"])(
+    "treats %s as public",
+    (address) => {
+      expect(isPrivateAddress(address)).toBe(false);
+    },
+  );
+
+  it("refuses relay URLs that tunnel to a private address", () => {
+    expect(["wss://[64:ff9b::a00:5]", "wss://[::ffff:10.0.0.5]", "wss://[2002:c0a8:1::1]"].map((u) => acceptedRelayUrl(u, PUBLIC))).toEqual([
+      null,
+      null,
+      null,
+    ]);
   });
 });
 

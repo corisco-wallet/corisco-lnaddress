@@ -36,26 +36,62 @@ for (const [network, prefix] of [
   ["127.0.0.0", 8],
   ["169.254.0.0", 16],
   ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
   ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
   ["224.0.0.0", 3],
 ] as const) {
   privateRanges.addSubnet(network, prefix, "ipv4");
 }
 for (const [network, prefix] of [
   ["::", 127],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["2001::", 32],
+  ["2001:db8::", 32],
   ["fc00::", 7],
   ["fe80::", 10],
+  ["fec0::", 10],
   ["ff00::", 8],
 ] as const) {
   privateRanges.addSubnet(network, prefix, "ipv6");
 }
 
+function ipv6Groups(address: string): number[] {
+  let text = address;
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number);
+    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const parse = (part: string | undefined) => (part ? part.split(":").map((group) => parseInt(group, 16)) : []);
+  const [head, tail] = text.split("::");
+  const front = parse(head);
+  const back = parse(tail);
+  return [...front, ...Array<number>(8 - front.length - back.length).fill(0), ...back];
+}
+
+/** The IPv4 address an IPv4-mapped, IPv4-compatible, NAT64 (64:ff9b::/96) or 6to4 (2002::/16) address routes to. */
+function embeddedIpv4(address: string): string | null {
+  const g = ipv6Groups(address);
+  const v4 = (high: number, low: number) => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  const zeroUpTo = (end: number, start = 0) => g.slice(start, end).every((group) => group === 0);
+  if (zeroUpTo(5) && (g[5] === 0 || g[5] === 0xffff)) return v4(g[6], g[7]);
+  if (g[0] === 0x64 && g[1] === 0xff9b && zeroUpTo(6, 2)) return v4(g[6], g[7]);
+  if (g[0] === 0x2002) return v4(g[1], g[2]);
+  return null;
+}
+
 export function isPrivateAddress(address: string): boolean {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
-  const ip = mapped ?? address;
+  const ip = address.replace(/%.*$/, "");
   const family = isIP(ip);
-  if (family === 0) return false;
-  return privateRanges.check(ip, family === 4 ? "ipv4" : "ipv6");
+  if (family === 4) return privateRanges.check(ip, "ipv4");
+  if (family !== 6) return false;
+  const embedded = embeddedIpv4(ip);
+  return privateRanges.check(ip, "ipv6") || (embedded !== null && privateRanges.check(embedded, "ipv4"));
 }
 
 /** Relay URLs come from the payer, so only public wss:// relays are dialled (resolved addresses are checked on connect). */
