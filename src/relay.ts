@@ -14,9 +14,10 @@ export interface PublishOptions {
 type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void;
 
 /** Refuses to connect when a relay's hostname resolves to a private address, so payer-chosen URLs can't reach internal hosts. */
-function publicOnlyLookup(hostname: string, options: object, callback: LookupCallback): void {
+export function publicOnlyLookup(hostname: string, options: object, callback: LookupCallback): void {
   dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err, []);
+    if (addresses.length === 0) return callback(Object.assign(new Error(`relay ${hostname} has no address`), { code: "ENOTFOUND" }), []);
     const blocked = addresses.find((entry) => isPrivateAddress(entry.address));
     if (blocked) return callback(Object.assign(new Error(`relay ${hostname} resolves to a private address`), { code: "EPRIVATE" }), []);
     if ((options as { all?: boolean }).all) return callback(null, addresses);
