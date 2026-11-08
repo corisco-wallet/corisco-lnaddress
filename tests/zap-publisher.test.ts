@@ -65,14 +65,44 @@ describe("ZapPublisher", () => {
     expect(store.zapOf(HASH)).toMatchObject({ attempts: 2, nextAttemptAt: 31_000 + 45_000 });
   });
 
-  it("keeps the receipt queued when publishing throws", async () => {
+  it("counts a throw as a failed attempt so the receipt backs off", async () => {
     const { store, publisher, log } = await setup(() => {
       throw new Error("boom");
     });
     await store.markSettled(HASH, PREIMAGE, 0);
     await publisher.publishDue();
     expect(log.error).toHaveBeenCalledWith("zap receipt failed:", expect.any(Error));
-    expect(store.zapOf(HASH)).toMatchObject({ state: "pending", attempts: 0 });
+    expect(store.zapOf(HASH)).toMatchObject({ state: "pending", attempts: 1, nextAttemptAt: 30_000 });
+  });
+
+  it("retries when recording the published receipt fails", async () => {
+    const { store, publisher } = await setup();
+    await store.markSettled(HASH, PREIMAGE, 0);
+    vi.spyOn(store, "zapReceiptPublished").mockRejectedValueOnce(new Error("db down"));
+    await publisher.publishDue();
+    expect(store.zapOf(HASH)).toMatchObject({ state: "pending", attempts: 1 });
+  });
+
+  it("backs off an unreadable row without holding up the others", async () => {
+    const { store, publisher, sent, log } = await setup();
+    await store.markSettled(HASH, PREIMAGE, 0);
+    const bad = { paymentHash: "b2".repeat(32), settledAt: 0, attempts: 0, error: new Error("failed verification") };
+    const failed = vi.spyOn(store, "zapReceiptFailed");
+    const due = store.dueZapReceipts.bind(store);
+    vi.spyOn(store, "dueZapReceipts").mockImplementationOnce(async (now, limit) => [bad, ...(await due(now, limit))]);
+    await publisher.publishDue();
+    expect(failed).toHaveBeenCalledWith(bad.paymentHash, 1, 30_000);
+    expect(log.error).toHaveBeenCalledWith("zap receipt failed:", bad.error);
+    expect(sent).toHaveLength(1);
+    expect(store.zapOf(HASH)?.state).toBe("published");
+  });
+
+  it("logs when even recording the failure fails", async () => {
+    const { store, publisher, log } = await setup(() => 0);
+    await store.markSettled(HASH, PREIMAGE, 0);
+    vi.spyOn(store, "zapReceiptFailed").mockRejectedValueOnce(new Error("db down"));
+    await expect(publisher.publishDue()).resolves.toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith("could not record a failed zap receipt:", expect.any(Error));
   });
 
   it("gives up two weeks after payment", async () => {

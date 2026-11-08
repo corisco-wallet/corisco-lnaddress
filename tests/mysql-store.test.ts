@@ -8,7 +8,7 @@ import { migrateSqliteToMysql } from "../scripts/migrate-sqlite-to-mysql";
 import { runMigrations } from "../src/migrations";
 import { MysqlInvoiceStore } from "../src/mysql-invoice-store";
 import { MysqlUserStore } from "../src/mysql-store";
-import { HASH_A, describeInvoiceStore, newInvoice } from "./invoice-store-contract";
+import { HASH_A, HASH_B, describeInvoiceStore, newInvoice } from "./invoice-store-contract";
 import { createLegacyDb, LEGACY_PUBKEY_A, LEGACY_PUBKEY_B } from "./legacy-fixture";
 import { describeUserStore } from "./store-contract";
 
@@ -153,6 +153,23 @@ describe.skipIf(!url)("MySQL", () => {
       await store.create(newInvoice({ paymentHash: other }), 0);
       await pool.query("UPDATE invoices SET pr_enc = ? WHERE payment_hash = ?", [rows[0].pr_enc, Buffer.from(other, "hex")]);
       await expect(store.get(other)).rejects.toThrow();
+    });
+
+    it("reports an unreadable zap row on its own instead of failing the whole batch", async () => {
+      await clearTables();
+      const users = new MysqlUserStore(pool, cipher);
+      const store = new MysqlInvoiceStore(pool, cipher);
+      await users.getOrCreate("02" + "ab".repeat(32), () => "payee-name-001");
+      await store.create(newInvoice({ paymentHash: HASH_A, zapRequest: '{"kind":9734}' }), 0);
+      await store.create(newInvoice({ paymentHash: HASH_B, zapRequest: '{"kind":9734}' }), 0);
+      await store.markSettled(HASH_A, "0f".repeat(32), 1_000);
+      await store.markSettled(HASH_B, "0f".repeat(32), 2_000);
+      await pool.query("UPDATE invoices SET zap_request_enc = ? WHERE payment_hash = ?", [Buffer.alloc(64, 1), Buffer.from(HASH_A, "hex")]);
+
+      const jobs = await store.dueZapReceipts(1e12, 10);
+      expect(jobs).toHaveLength(2);
+      expect(jobs.find((job) => job.paymentHash === HASH_A)).toMatchObject({ attempts: 0, settledAt: 1_000, error: expect.any(Error) });
+      expect(jobs.find((job) => job.paymentHash === HASH_B)).toMatchObject({ zapRequest: '{"kind":9734}' });
     });
   });
 });

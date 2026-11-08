@@ -127,21 +127,26 @@ export class MysqlInvoiceStore implements InvoiceStore {
        ORDER BY i.zap_next_attempt_at LIMIT ${Math.trunc(limit)}`,
       [now],
     );
-    return rows.map((row) => {
-      const hash = Buffer.from(row.payment_hash);
+    return rows.map((row) => this.toZapReceiptJob(row));
+  }
+
+  private toZapReceiptJob(row: ZapJobRecord): ZapReceiptJob {
+    const hash = Buffer.from(row.payment_hash);
+    const base = { paymentHash: hash.toString("hex"), settledAt: Number(row.settled_at), attempts: row.zap_attempts };
+    try {
       // Same context the user store seals the pubkey with, and the same consistency check it runs.
       const identityPubkey = this.cipher.decrypt("pubkey", row.pubkey_enc, Buffer.concat([row.username_hash, row.pubkey_hash]));
       if (!this.cipher.lookupHash("pubkey", identityPubkey).equals(row.pubkey_hash)) throw new Error("a stored user record failed verification");
       return {
-        paymentHash: hash.toString("hex"),
+        ...base,
         receiverIdentityPubkey: identityPubkey,
         zapRequest: this.cipher.decrypt("zap_request", Buffer.from(row.zap_request_enc), hash),
         pr: this.cipher.decrypt("invoice", Buffer.from(row.pr_enc), hash),
         preimage: this.cipher.decrypt("preimage", Buffer.from(row.preimage_enc), hash),
-        settledAt: Number(row.settled_at),
-        attempts: row.zap_attempts,
       };
-    });
+    } catch (err) {
+      return { ...base, error: err instanceof Error ? err : new Error(String(err)) };
+    }
   }
 
   async zapReceiptPublished(paymentHash: string, receipt: string): Promise<void> {

@@ -28,16 +28,26 @@ export interface Invoice {
   settledAt: number | null;
 }
 
-/** A settled zap whose receipt hasn't been published yet. */
-export interface ZapReceiptJob {
+interface ZapReceiptJobBase {
   paymentHash: string;
+  settledAt: number;
+  attempts: number;
+}
+
+/** A settled zap whose receipt hasn't been published yet. */
+export interface ReadableZapReceiptJob extends ZapReceiptJobBase {
   receiverIdentityPubkey: string;
   zapRequest: string;
   pr: string;
   preimage: string;
-  settledAt: number;
-  attempts: number;
 }
+
+/** A pending receipt whose row failed decryption or verification; it is retried and given up on like a failed publish. */
+export interface UnreadableZapReceiptJob extends ZapReceiptJobBase {
+  error: Error;
+}
+
+export type ZapReceiptJob = ReadableZapReceiptJob | UnreadableZapReceiptJob;
 
 export interface InvoiceStore {
   /** Fails if the user doesn't exist or the payment hash or receive request id is already stored. */

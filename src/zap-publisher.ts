@@ -50,7 +50,7 @@ export class ZapPublisher {
   /** One pass over the receipts that are due. */
   async publishDue(): Promise<void> {
     const jobs = await this.options.store.dueZapReceipts(this.now(), this.batchSize);
-    await Promise.all(jobs.map((job) => this.publishOne(job).catch((err) => this.log.error("zap receipt failed:", err))));
+    await Promise.all(jobs.map((job) => this.attempt(job)));
   }
 
   start({ everyMs = 30 * SECOND } = {}): void {
@@ -88,19 +88,32 @@ export class ZapPublisher {
     await this.running;
   }
 
-  private async publishOne(job: ZapReceiptJob): Promise<void> {
+  /** Any failure, including a throw, counts as an attempt, so a job that keeps failing backs off and is eventually given up. */
+  private async attempt(job: ZapReceiptJob): Promise<void> {
+    try {
+      if (await this.publishOne(job)) return;
+    } catch (err) {
+      this.log.error("zap receipt failed:", err);
+    }
+    await this.recordFailure(job).catch((err) => this.log.error("could not record a failed zap receipt:", err));
+  }
+
+  private async publishOne(job: ZapReceiptJob): Promise<boolean> {
+    if ("error" in job) throw job.error;
     const keys: NostrKeys = this.options.signer.keysFor(job.receiverIdentityPubkey);
     const receipt = buildZapReceipt(job, keys);
     const relays = receiptRelays(JSON.parse(job.zapRequest), this.options.policy);
     const accepted = await this.publish(relays, receipt, { keys, policy: this.options.policy });
-    if (accepted > 0) {
-      await this.options.store.zapReceiptPublished(job.paymentHash, JSON.stringify(receipt));
-      return;
-    }
+    if (accepted === 0) return false;
+    await this.options.store.zapReceiptPublished(job.paymentHash, JSON.stringify(receipt));
+    return true;
+  }
+
+  private async recordFailure(job: ZapReceiptJob): Promise<void> {
     const attempts = job.attempts + 1;
     const now = this.now();
     const giveUp = now - job.settledAt > this.giveUpAfterMs;
-    if (giveUp) this.log.warn(`giving up on a zap receipt no relay accepted after ${attempts} attempts`);
+    if (giveUp) this.log.warn(`giving up on a zap receipt not published after ${attempts} attempts`);
     await this.options.store.zapReceiptFailed(job.paymentHash, attempts, giveUp ? null : now + retryDelay(attempts));
   }
 }
