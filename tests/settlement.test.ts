@@ -19,6 +19,7 @@ async function setup(schedule?: CheckSchedule) {
   let clock = 0;
   const statuses = new Map<string, ReceiveStatus | null | Error>();
   const lookups: string[] = [];
+  const hold: { lookup?: Promise<void> } = {};
   const log = { error: vi.fn(), warn: vi.fn() };
   const watcher = new SettlementWatcher({
     store,
@@ -29,6 +30,7 @@ async function setup(schedule?: CheckSchedule) {
     source: {
       async getReceiveStatus(id) {
         lookups.push(id);
+        await hold.lookup;
         const status = statuses.get(id) ?? { settled: false, preimage: null };
         if (status instanceof Error) throw status;
         return status;
@@ -43,6 +45,7 @@ async function setup(schedule?: CheckSchedule) {
     watcher,
     statuses,
     lookups,
+    hold,
     log,
     settled,
     at: (ms: number) => {
@@ -244,6 +247,78 @@ describe("SettlementWatcher", () => {
 
     expect(await watcher.checkSoon("req")).toBe(true);
     expect(await watcher.checkSoon("unknown")).toBe(false);
+  });
+
+  it("keeps a webhook nudge that arrives while the invoice is being checked", async () => {
+    const { watcher, store, lookups, hold, at } = await setup(backstopCheckDelay);
+    let release!: () => void;
+    hold.lookup = new Promise((resolve) => (release = resolve));
+    at(3_000);
+    const pass = watcher.poll();
+    await vi.waitFor(() => expect(lookups).toEqual(["req"]));
+    expect(await watcher.checkSoon("req")).toBe(true);
+    release();
+    await pass;
+    expect(await store.due(3_000, 10)).toHaveLength(1);
+  });
+
+  it("settles an expired invoice when a webhook reports a late payment", async () => {
+    const { watcher, store, statuses, settled, at } = await setup();
+    at(64 * MINUTE);
+    await watcher.poll();
+    expect((await store.get(HASH))?.status).toBe("expired");
+
+    statuses.set("req", { settled: true, preimage: PREIMAGE });
+    at(65 * MINUTE);
+    expect(await watcher.checkSoon("req")).toBe(true);
+    await watcher.stop();
+    expect(await store.get(HASH)).toMatchObject({ status: "settled", preimage: PREIMAGE, settledAt: 65 * MINUTE });
+    expect(settled).toHaveLength(1);
+  });
+
+  it("leaves an expired invoice expired when the webhook can't be proven", async () => {
+    const { watcher, store, statuses, settled, at } = await setup();
+    at(64 * MINUTE);
+    await watcher.poll();
+    statuses.set("req", { settled: true, preimage: "00".repeat(32) });
+    expect(await watcher.checkSoon("req")).toBe(true);
+    await watcher.stop();
+    expect((await store.get(HASH))?.status).toBe("expired");
+    expect(settled).toHaveLength(0);
+  });
+
+  it("finishes the pass when one invoice's check throws", async () => {
+    const { watcher, store, log, at } = await setup();
+    await store.create(newInvoice({ paymentHash: "ee".repeat(32), receiveRequestId: "other" }), 3_000);
+    const reschedule = store.reschedule.bind(store);
+    store.reschedule = async (hash, next) => {
+      if (hash === HASH) throw new Error("mysql hiccup");
+      return reschedule(hash, next);
+    };
+    at(3_000);
+    await expect(watcher.poll()).resolves.toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith("invoice check failed:", expect.any(Error));
+    expect(await store.due(3_000, 10)).toEqual([expect.objectContaining({ paymentHash: HASH })]);
+  });
+
+  it("treats a hung status lookup as failed", async () => {
+    const users = new MemoryUserStore();
+    await users.getOrCreate("02" + "ab".repeat(32), () => "payee-name-001");
+    const store = new MemoryInvoiceStore(users);
+    await store.create(newInvoice({ paymentHash: HASH, receiveRequestId: "req", expiresAt: 60 * MINUTE }), 0);
+    const log = { error: vi.fn(), warn: vi.fn() };
+    const watcher = new SettlementWatcher({
+      store,
+      retentionDays: 7,
+      now: () => 1_000,
+      log,
+      lookupTimeoutMs: 5,
+      source: { getReceiveStatus: () => new Promise(() => {}) },
+    });
+    await watcher.poll();
+    expect(log.error).toHaveBeenCalledWith("invoice status lookup failed:", expect.any(Error));
+    expect(await store.due(1_000 + 29_999, 10)).toHaveLength(0);
+    expect(await store.due(1_000 + 30_000, 10)).toHaveLength(1);
   });
 
   it("stops cleanly while running on timers", async () => {

@@ -34,7 +34,7 @@ export interface InvoiceStore {
   /** Pending invoices whose next status check is due, earliest first. */
   due(now: number, limit: number): Promise<Invoice[]>;
   reschedule(paymentHash: string, nextCheckAt: number): Promise<void>;
-  /** Only moves a pending invoice; returns false if it wasn't pending. The caller checks the preimage against the hash. */
+  /** Moves a pending or expired invoice (a proven late payment); returns false otherwise. The caller checks the preimage. */
   markSettled(paymentHash: string, preimage: string, settledAt: number): Promise<boolean>;
   /** Only moves a pending invoice; returns false if it wasn't pending. */
   markExpired(paymentHash: string): Promise<boolean>;

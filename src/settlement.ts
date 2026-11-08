@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Invoice, InvoiceStore } from "./invoice-store";
-import type { ReceiveStatusSource } from "./invoices";
+import type { ReceiveStatus, ReceiveStatusSource } from "./invoices";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -25,6 +25,14 @@ export function preimageMatches(preimage: string, paymentHash: string): boolean 
   return createHash("sha256").update(Buffer.from(preimage, "hex")).digest("hex") === paymentHash;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export type SettledListener = (invoice: Invoice) => void | Promise<void>;
 
 export interface SettlementOptions {
@@ -39,6 +47,8 @@ export interface SettlementOptions {
   concurrency?: number;
   /** A payment can land just after the invoice's expiry time; keep checking this long before giving up. */
   expiryGraceMs?: number;
+  /** A status lookup that takes longer than this counts as failed. */
+  lookupTimeoutMs?: number;
   /** Delay before re-checking an invoice whose status lookup failed. */
   retryDelayMs?: number;
   /** How long after expiry an invoice whose lookups keep failing is still retried before it is expired. */
@@ -56,6 +66,7 @@ export class SettlementWatcher {
   private readonly batchSize: number;
   private readonly concurrency: number;
   private readonly expiryGraceMs: number;
+  private readonly lookupTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly failedLookupCutoffMs: number;
   private readonly expiredRetentionMs: number;
@@ -63,6 +74,8 @@ export class SettlementWatcher {
   private schedule: CheckSchedule;
   private timers: NodeJS.Timeout[] = [];
   private readonly inFlight = new Set<Promise<unknown>>();
+  private readonly checking = new Set<string>();
+  private readonly nudged = new Set<string>();
   private stopped = true;
 
   constructor(private readonly options: SettlementOptions) {
@@ -71,6 +84,7 @@ export class SettlementWatcher {
     this.batchSize = options.batchSize ?? 50;
     this.concurrency = options.concurrency ?? 4;
     this.expiryGraceMs = options.expiryGraceMs ?? 2 * MINUTE;
+    this.lookupTimeoutMs = options.lookupTimeoutMs ?? 15 * SECOND;
     this.retryDelayMs = options.retryDelayMs ?? 30 * SECOND;
     this.failedLookupCutoffMs = options.failedLookupCutoffMs ?? DAY;
     this.expiredRetentionMs = options.expiredRetentionMs ?? 10 * MINUTE;
@@ -88,13 +102,18 @@ export class SettlementWatcher {
   }
 
   /**
-   * Makes a pending invoice due now; the check still verifies with Spark, so a forged call settles nothing.
-   * Returns false if no invoice has this receive request id.
+   * Makes a pending invoice due now, or re-checks an expired one in case it was paid late; checks always verify
+   * with Spark, so a forged call settles nothing. Returns false if no invoice has this receive request id.
    */
   async checkSoon(receiveRequestId: string): Promise<boolean> {
     const invoice = await this.options.store.getByReceiveRequestId(receiveRequestId);
     if (!invoice) return false;
-    if (invoice.status === "pending") await this.options.store.reschedule(invoice.paymentHash, this.now());
+    if (invoice.status === "pending") {
+      if (this.checking.has(invoice.paymentHash)) this.nudged.add(invoice.paymentHash);
+      await this.options.store.reschedule(invoice.paymentHash, this.now());
+    } else if (invoice.status === "expired") {
+      this.track(this.settleLate(invoice).catch((err) => this.log.error("late settlement check failed:", err)));
+    }
     return true;
   }
 
@@ -108,7 +127,9 @@ export class SettlementWatcher {
     const due = await this.options.store.due(this.now(), this.batchSize);
     let next = 0;
     const worker = async () => {
-      while (next < due.length) await this.check(due[next++]);
+      while (next < due.length) {
+        await this.checkOnce(due[next++]).catch((err) => this.log.error("invoice check failed:", err));
+      }
     };
     await Promise.all(Array.from({ length: Math.min(this.concurrency, due.length) }, worker));
   }
@@ -136,6 +157,11 @@ export class SettlementWatcher {
     await Promise.all(this.inFlight);
   }
 
+  private track(task: Promise<unknown>): void {
+    this.inFlight.add(task);
+    void task.finally(() => this.inFlight.delete(task));
+  }
+
   /** Runs `task` every `everyMs`, never overlapping itself. */
   private loop(everyMs: number, task: () => Promise<unknown>, failure: string): void {
     const run = () => {
@@ -155,11 +181,27 @@ export class SettlementWatcher {
     run();
   }
 
+  private async checkOnce(invoice: Invoice): Promise<void> {
+    const hash = invoice.paymentHash;
+    this.checking.add(hash);
+    try {
+      await this.check(invoice);
+    } finally {
+      this.checking.delete(hash);
+      // A webhook that arrived mid-check had its reschedule overwritten by this check's.
+      if (this.nudged.delete(hash)) await this.options.store.reschedule(hash, this.now());
+    }
+  }
+
+  private lookup(invoice: Invoice): Promise<ReceiveStatus | null> {
+    return withTimeout(this.options.source.getReceiveStatus(invoice.receiveRequestId), this.lookupTimeoutMs);
+  }
+
   private async check(invoice: Invoice): Promise<void> {
-    const { store, source } = this.options;
+    const { store } = this.options;
     let status;
     try {
-      status = await source.getReceiveStatus(invoice.receiveRequestId);
+      status = await this.lookup(invoice);
     } catch (err) {
       this.log.error("invoice status lookup failed:", err);
       const now = this.now();
@@ -172,23 +214,31 @@ export class SettlementWatcher {
       return;
     }
     const now = this.now();
-
-    if (status?.settled) {
-      if (status.preimage && preimageMatches(status.preimage, invoice.paymentHash)) {
-        if (await store.markSettled(invoice.paymentHash, status.preimage, now)) {
-          await this.emit({ ...invoice, status: "settled", preimage: status.preimage, settledAt: now });
-        }
-        return;
-      }
-      // Never report a payment we can't prove: treat it as unpaid, so it keeps being checked until it expires.
-      this.log.warn("Spark reports a settled invoice without a preimage matching its payment hash");
-    }
+    if (await this.settleIfPaid(invoice, status, now)) return;
 
     if (now > invoice.expiresAt + this.expiryGraceMs) {
       await store.markExpired(invoice.paymentHash);
     } else {
       await store.reschedule(invoice.paymentHash, now + this.schedule(now - invoice.createdAt));
     }
+  }
+
+  private async settleLate(invoice: Invoice): Promise<void> {
+    await this.settleIfPaid(invoice, await this.lookup(invoice), this.now());
+  }
+
+  /** Returns true once the payment is proven, whether this call or an earlier one stored it. */
+  private async settleIfPaid(invoice: Invoice, status: ReceiveStatus | null, now: number): Promise<boolean> {
+    if (!status?.settled) return false;
+    if (!status.preimage || !preimageMatches(status.preimage, invoice.paymentHash)) {
+      // Never report a payment we can't prove: treat it as unpaid, so it keeps being checked until it expires.
+      this.log.warn("Spark reports a settled invoice without a preimage matching its payment hash");
+      return false;
+    }
+    if (await this.options.store.markSettled(invoice.paymentHash, status.preimage, now)) {
+      await this.emit({ ...invoice, status: "settled", preimage: status.preimage, settledAt: now });
+    }
+    return true;
   }
 
   private async emit(invoice: Invoice): Promise<void> {

@@ -78,7 +78,7 @@ export class MysqlInvoiceStore implements InvoiceStore {
   async markSettled(paymentHash: string, preimage: string, settledAt: number): Promise<boolean> {
     const hash = hashBytes(paymentHash);
     const [result] = await this.pool.execute<ResultSetHeader>(
-      "UPDATE invoices SET status = 'settled', preimage_enc = ?, settled_at = ? WHERE payment_hash = ? AND status = 'pending'",
+      "UPDATE invoices SET status = 'settled', preimage_enc = ?, settled_at = ? WHERE payment_hash = ? AND status IN ('pending', 'expired')",
       [this.cipher.encrypt("preimage", preimage, hash), settledAt, hash],
     );
     return result.affectedRows === 1;

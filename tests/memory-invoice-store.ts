@@ -42,7 +42,7 @@ export class MemoryInvoiceStore implements InvoiceStore {
 
   async markSettled(paymentHash: string, preimage: string, settledAt: number) {
     const row = this.rows.get(paymentHash);
-    if (row?.invoice.status !== "pending") return false;
+    if (row?.invoice.status !== "pending" && row?.invoice.status !== "expired") return false;
     Object.assign(row.invoice, { status: "settled", preimage, settledAt });
     return true;
   }

@@ -95,11 +95,13 @@ export function describeInvoiceStore(name: string, create: () => Promise<{ store
       expect(await store.due(100_000, 10)).toHaveLength(0);
     });
 
-    it("never settles an expired invoice", async () => {
+    it("settles an expired invoice paid late, but only once", async () => {
       await store.create(newInvoice(), 4_000);
       expect(await store.markExpired(HASH_A)).toBe(true);
-      expect(await store.markSettled(HASH_A, PREIMAGE, 50_000)).toBe(false);
-      expect(await store.get(HASH_A)).toMatchObject({ status: "expired", preimage: null, settledAt: null });
+      expect(await store.markSettled(HASH_A, PREIMAGE, 50_000)).toBe(true);
+      expect(await store.markSettled(HASH_A, PREIMAGE, 60_000)).toBe(false);
+      expect(await store.markExpired(HASH_A)).toBe(false);
+      expect(await store.get(HASH_A)).toMatchObject({ status: "settled", preimage: PREIMAGE, settledAt: 50_000 });
     });
 
     it("deletes old expired and settled rows but never pending ones", async () => {
