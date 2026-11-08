@@ -1,6 +1,6 @@
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import type { DataCipher } from "./crypto";
-import type { Invoice, InvoiceStatus, InvoiceStore, NewInvoice } from "./invoice-store";
+import type { Invoice, InvoiceStatus, InvoiceStore, NewInvoice, ZapReceiptJob } from "./invoice-store";
 
 interface InvoiceRecord extends RowDataPacket {
   payment_hash: Buffer;
@@ -12,6 +12,18 @@ interface InvoiceRecord extends RowDataPacket {
   created_at: number | string;
   expires_at: number | string;
   settled_at: number | string | null;
+}
+
+interface ZapJobRecord extends RowDataPacket {
+  payment_hash: Buffer;
+  pr_enc: Buffer;
+  preimage_enc: Buffer;
+  settled_at: number | string;
+  zap_request_enc: Buffer;
+  zap_attempts: number;
+  username_hash: Buffer;
+  pubkey_hash: Buffer;
+  pubkey_enc: Buffer;
 }
 
 const COLUMNS =
@@ -29,8 +41,9 @@ export class MysqlInvoiceStore implements InvoiceStore {
   async create(invoice: NewInvoice, firstCheckAt: number): Promise<void> {
     const hash = hashBytes(invoice.paymentHash);
     const [result] = await this.pool.execute<ResultSetHeader>(
-      `INSERT INTO invoices (payment_hash, receive_request_id, user_id, amount_msat, pr_enc, created_at, expires_at, next_check_at)
-       SELECT ?, ?, id, ?, ?, ?, ?, ? FROM users WHERE username_hash = ?`,
+      `INSERT INTO invoices (payment_hash, receive_request_id, user_id, amount_msat, pr_enc, created_at, expires_at, next_check_at,
+                             zap_request_enc, zap_state, zap_next_attempt_at)
+       SELECT ?, ?, id, ?, ?, ?, ?, ?, ?, ?, ? FROM users WHERE username_hash = ?`,
       [
         hash,
         invoice.receiveRequestId,
@@ -39,6 +52,9 @@ export class MysqlInvoiceStore implements InvoiceStore {
         invoice.createdAt,
         invoice.expiresAt,
         firstCheckAt,
+        invoice.zapRequest === undefined ? null : this.cipher.encrypt("zap_request", invoice.zapRequest, hash),
+        invoice.zapRequest === undefined ? null : "pending",
+        invoice.zapRequest === undefined ? null : 0,
         this.cipher.lookupHash("username", invoice.username.toLowerCase()),
       ],
     );
@@ -95,10 +111,53 @@ export class MysqlInvoiceStore implements InvoiceStore {
   async deleteOld({ expiredBefore, settledBefore }: { expiredBefore: number; settledBefore: number }): Promise<number> {
     const [result] = await this.pool.execute<ResultSetHeader>(
       `DELETE FROM invoices
-       WHERE (status = 'expired' AND expires_at < ?) OR (status = 'settled' AND settled_at < ?)`,
+       WHERE (status = 'expired' AND expires_at < ?)
+          OR (status = 'settled' AND settled_at < ? AND (zap_state IS NULL OR zap_state <> 'pending'))`,
       [expiredBefore, settledBefore],
     );
     return result.affectedRows;
+  }
+
+  async dueZapReceipts(now: number, limit: number): Promise<ZapReceiptJob[]> {
+    const [rows] = await this.pool.execute<ZapJobRecord[]>(
+      `SELECT i.payment_hash, i.pr_enc, i.preimage_enc, i.settled_at, i.zap_request_enc, i.zap_attempts,
+              u.username_hash, u.pubkey_hash, u.pubkey_enc
+       FROM invoices i JOIN users u ON u.id = i.user_id
+       WHERE i.zap_state = 'pending' AND i.status = 'settled' AND i.zap_next_attempt_at <= ?
+       ORDER BY i.zap_next_attempt_at LIMIT ${Math.trunc(limit)}`,
+      [now],
+    );
+    return rows.map((row) => {
+      const hash = Buffer.from(row.payment_hash);
+      // Same context the user store seals the pubkey with, and the same consistency check it runs.
+      const identityPubkey = this.cipher.decrypt("pubkey", row.pubkey_enc, Buffer.concat([row.username_hash, row.pubkey_hash]));
+      if (!this.cipher.lookupHash("pubkey", identityPubkey).equals(row.pubkey_hash)) throw new Error("a stored user record failed verification");
+      return {
+        paymentHash: hash.toString("hex"),
+        receiverIdentityPubkey: identityPubkey,
+        zapRequest: this.cipher.decrypt("zap_request", Buffer.from(row.zap_request_enc), hash),
+        pr: this.cipher.decrypt("invoice", Buffer.from(row.pr_enc), hash),
+        preimage: this.cipher.decrypt("preimage", Buffer.from(row.preimage_enc), hash),
+        settledAt: Number(row.settled_at),
+        attempts: row.zap_attempts,
+      };
+    });
+  }
+
+  async zapReceiptPublished(paymentHash: string, receipt: string): Promise<void> {
+    const hash = hashBytes(paymentHash);
+    await this.pool.execute(
+      "UPDATE invoices SET zap_state = 'published', zap_receipt_enc = ?, zap_next_attempt_at = NULL WHERE payment_hash = ? AND zap_state = 'pending'",
+      [this.cipher.encrypt("zap_receipt", receipt, hash), hash],
+    );
+  }
+
+  async zapReceiptFailed(paymentHash: string, attempts: number, nextAttemptAt: number | null): Promise<void> {
+    await this.pool.execute(
+      `UPDATE invoices SET zap_attempts = ?, zap_next_attempt_at = ?, zap_state = IF(? IS NULL, 'abandoned', 'pending')
+       WHERE payment_hash = ? AND zap_state = 'pending'`,
+      [attempts, nextAttemptAt, nextAttemptAt, hashBytes(paymentHash)],
+    );
   }
 
   private toInvoice(row: InvoiceRecord): Invoice {

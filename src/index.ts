@@ -9,6 +9,8 @@ import { runMigrations } from "./migrations";
 import { MysqlInvoiceStore } from "./mysql-invoice-store";
 import { MysqlUserStore } from "./mysql-store";
 import { SettlementWatcher, backstopCheckDelay, nextCheckDelay } from "./settlement";
+import { ZapPublisher } from "./zap-publisher";
+import { ZapSigner } from "./zaps";
 
 const config = loadConfig();
 const pool = createPool({
@@ -50,6 +52,17 @@ const settlement = new SettlementWatcher({
   retentionDays: config.invoiceRetentionDays,
   schedule: nextCheckDelay,
 });
+
+const zaps = config.nostrSecretKey && {
+  signer: new ZapSigner(config.nostrSecretKey),
+  // Local relays are only reachable on regtest; on mainnet only public wss:// relays are dialled.
+  policy: { allowPrivate: config.network === "REGTEST" },
+};
+const zapPublisher = zaps && new ZapPublisher({ store: invoiceStore, ...zaps });
+if (zapPublisher) {
+  settlement.onSettled(() => zapPublisher.kick());
+  zapPublisher.start();
+}
 settlement.start();
 
 const app = createApp({
@@ -64,6 +77,7 @@ const app = createApp({
     secret: config.sparkWebhook.secret,
     checkSoon: (id) => settlement.checkSoon(id),
   },
+  zaps,
 });
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => console.log(`listening on :${port}`));
@@ -78,7 +92,7 @@ if (config.sparkWebhook) {
 
 process.on("SIGTERM", () => {
   const closed = new Promise<void>((resolve) => server.close(() => resolve()));
-  void Promise.all([closed, settlement.stop()])
+  void Promise.all([closed, settlement.stop(), zapPublisher?.stop()])
     .then(() => users.close())
     .finally(() => process.exit(0));
 });

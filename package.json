@@ -20,15 +20,18 @@
     "@hono/node-server": "^2.1.5",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
+    "@scure/base": "^1.2.6",
     "better-sqlite3": "^12.11.1",
     "hono": "^4.13.13",
     "light-bolt11-decoder": "^3.2.0",
     "mysql2": "^3.24.6",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "ws": "^8.22.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.2",
     "typescript": "^7.0.2",
     "vitest": "^3.2.6"
   }

@@ -118,5 +118,50 @@ export function describeInvoiceStore(name: string, create: () => Promise<{ store
       expect(await store.get(HASH_B)).toBeUndefined();
       expect((await store.get(HASH_C))?.status).toBe("pending");
     });
+
+    it("queues a zap receipt only once the invoice settles, and returns what the receipt needs", async () => {
+      await store.create(newInvoice({ zapRequest: '{"kind":9734}' }), 4_000);
+      await store.create(newInvoice({ paymentHash: HASH_B }), 4_000);
+      expect(await store.dueZapReceipts(1e12, 10)).toEqual([]);
+      await store.markSettled(HASH_A, PREIMAGE, 50_000);
+      await store.markSettled(HASH_B, PREIMAGE, 50_000);
+      expect(await store.dueZapReceipts(0, 10)).toEqual([
+        {
+          paymentHash: HASH_A,
+          receiverIdentityPubkey: PUBKEY,
+          zapRequest: '{"kind":9734}',
+          pr: "lnbcrt210n1-test-invoice-a",
+          preimage: PREIMAGE,
+          settledAt: 50_000,
+          attempts: 0,
+        },
+      ]);
+    });
+
+    it("schedules retries, then stops offering a published or abandoned receipt", async () => {
+      await store.create(newInvoice({ zapRequest: "{}" }), 4_000);
+      await store.create(newInvoice({ paymentHash: HASH_B, zapRequest: "{}" }), 4_000);
+      await store.markSettled(HASH_A, PREIMAGE, 50_000);
+      await store.markSettled(HASH_B, PREIMAGE, 50_000);
+
+      await store.zapReceiptFailed(HASH_A, 1, 80_000);
+      expect((await store.dueZapReceipts(79_999, 10)).map((j) => j.paymentHash)).toEqual([HASH_B]);
+      expect(await store.dueZapReceipts(80_000, 10)).toEqual([
+        expect.objectContaining({ paymentHash: HASH_B }),
+        expect.objectContaining({ paymentHash: HASH_A, attempts: 1 }),
+      ]);
+
+      await store.zapReceiptPublished(HASH_A, '{"kind":9735}');
+      await store.zapReceiptFailed(HASH_B, 2, null);
+      expect(await store.dueZapReceipts(1e12, 10)).toEqual([]);
+    });
+
+    it("keeps a settled zap until its receipt is published", async () => {
+      await store.create(newInvoice({ zapRequest: "{}" }), 4_000);
+      await store.markSettled(HASH_A, PREIMAGE, 50_000);
+      expect(await store.deleteOld({ expiredBefore: 1e12, settledBefore: 1e12 })).toBe(0);
+      await store.zapReceiptPublished(HASH_A, "{}");
+      expect(await store.deleteOld({ expiredBefore: 1e12, settledBefore: 1e12 })).toBe(1);
+    });
   });
 }

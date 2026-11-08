@@ -1,4 +1,5 @@
 import { parseDataKey } from "./crypto";
+import { parseNostrSecretKey } from "./nostr";
 import { SPARK_WEBHOOK_PATH } from "./spark-webhook";
 
 export type Network = "REGTEST" | "MAINNET";
@@ -23,6 +24,8 @@ export interface Config {
   /** How long paid invoices are kept, for payment status lookups. */
   invoiceRetentionDays: number;
   sparkWebhook?: { url: string; secret: string };
+  /** Master key the per-user zap receipt keys are derived from; zaps are off without it. */
+  nostrSecretKey?: Uint8Array;
 }
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
@@ -54,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (webhookSecret.length < 32) throw new Error("SPARK_WEBHOOK_SECRET must be at least 32 characters");
     if (!publicBaseUrl.startsWith("https://")) throw new Error("SPARK_WEBHOOK_SECRET needs an https PUBLIC_BASE_URL");
   }
+  const nostrSecretKey = env.NOSTR_SECRET_KEY?.trim();
   return {
     port,
     network,
@@ -71,5 +75,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxSendableSats,
     invoiceRetentionDays,
     sparkWebhook: webhookSecret ? { url: publicBaseUrl + SPARK_WEBHOOK_PATH, secret: webhookSecret } : undefined,
+    nostrSecretKey: nostrSecretKey ? parseNostrSecretKey(nostrSecretKey) : undefined,
   };
 }
