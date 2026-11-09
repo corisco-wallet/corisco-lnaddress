@@ -28,6 +28,13 @@ export interface Config {
   nostrSecretKey?: Uint8Array;
 }
 
+function baseUrl(key: string, value: string, network: Network): string {
+  const url = value.replace(/\/+$/, "");
+  if (!/^https?:\/\//.test(url)) throw new Error(`${key} must start with http:// or https://`);
+  if (network === "MAINNET" && !url.startsWith("https://")) throw new Error(`${key} must be https on MAINNET`);
+  return url;
+}
+
 function required(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key]?.trim();
   if (!value) throw new Error(`${key} is required`);
@@ -39,11 +46,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (network !== "REGTEST" && network !== "MAINNET") {
     throw new Error(`SPARK_NETWORK must be REGTEST or MAINNET, got "${network}"`);
   }
-  const publicBaseUrl = required(env, "PUBLIC_BASE_URL").replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(publicBaseUrl)) throw new Error("PUBLIC_BASE_URL must start with http:// or https://");
-  if (network === "MAINNET" && !publicBaseUrl.startsWith("https://")) {
-    throw new Error("PUBLIC_BASE_URL must be https on MAINNET");
-  }
+  const publicBaseUrl = baseUrl("PUBLIC_BASE_URL", required(env, "PUBLIC_BASE_URL"), network);
+  const apiBaseUrlValue = env.API_BASE_URL?.trim();
+  const apiBaseUrl = apiBaseUrlValue ? baseUrl("API_BASE_URL", apiBaseUrlValue, network) : publicBaseUrl;
   const port = Number(env.PORT ?? 3000);
   const maxSendableSats = Number(env.MAX_SENDABLE_SATS ?? 1_000_000);
   if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be a positive integer");
@@ -55,7 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const webhookSecret = env.SPARK_WEBHOOK_SECRET?.trim();
   if (webhookSecret) {
     if (webhookSecret.length < 32) throw new Error("SPARK_WEBHOOK_SECRET must be at least 32 characters");
-    if (!publicBaseUrl.startsWith("https://")) throw new Error("SPARK_WEBHOOK_SECRET needs an https PUBLIC_BASE_URL");
+    if (!apiBaseUrl.startsWith("https://")) throw new Error("SPARK_WEBHOOK_SECRET needs an https API_BASE_URL (or PUBLIC_BASE_URL)");
   }
   const nostrSecretKey = env.NOSTR_SECRET_KEY?.trim();
   return {
@@ -74,7 +79,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     serverMnemonic: required(env, "SERVER_MNEMONIC"),
     maxSendableSats,
     invoiceRetentionDays,
-    sparkWebhook: webhookSecret ? { url: publicBaseUrl + SPARK_WEBHOOK_PATH, secret: webhookSecret } : undefined,
+    sparkWebhook: webhookSecret ? { url: apiBaseUrl + SPARK_WEBHOOK_PATH, secret: webhookSecret } : undefined,
     nostrSecretKey: nostrSecretKey ? parseNostrSecretKey(nostrSecretKey) : undefined,
   };
 }

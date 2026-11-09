@@ -56,8 +56,10 @@ How payment is detected: a background watcher asks Spark for the status of each 
 right after it is created and less often later. An invoice counts as paid only when Spark reports the
 payment as received **and** returns a preimage whose SHA-256 matches the payment hash.
 
-With `SPARK_WEBHOOK_SECRET` set (and an https `PUBLIC_BASE_URL`), the server registers
-`PUBLIC_BASE_URL/webhooks/spark` with Spark on startup for `SPARK_LIGHTNING_RECEIVE_FINISHED` events.
+With `SPARK_WEBHOOK_SECRET` set, the server registers `API_BASE_URL/webhooks/spark` with Spark on
+startup for `SPARK_LIGHTNING_RECEIVE_FINISHED` events. `API_BASE_URL` is the host that serves the API
+(registration and webhooks) when it differs from the LNURL host; it defaults to `PUBLIC_BASE_URL` and
+must be https.
 A delivery whose `X-Spark-Signature` matches only makes that invoice due for a check right away; the check
 itself still asks Spark and verifies the preimage, so a forged or replayed webhook can't mark anything
 paid. Polling keeps running as a backstop for missed deliveries, but slowly (30 s, then every 2 min).
@@ -83,11 +85,13 @@ restart never loses one.
   (the resolved IP is checked too); REGTEST also allows `ws://` and local relays for development.
 - **Testing on regtest:** `npm run dev:zap` registers a fresh address, sends invalid and valid zap
   requests, pays the invoice from `PAYER_MNEMONIC` and checks the receipt the way a client would. Point it
-  at a deployment with `BASE_URL=https://test.corisco.org LNADDRESS_DOMAIN=test.corisco.org`; the receipt
-  goes to `RELAY_URL` (default `wss://nos.lol`, with throwaway keys).
+  at a deployment with `BASE_URL` (registration) and `LNURL_BASE_URL` (LNURL endpoints, if served elsewhere), e.g.
+  `BASE_URL=https://api.test.corisco.org LNURL_BASE_URL=https://test.corisco.org LNADDRESS_DOMAIN=test.corisco.org`; the receipt
+  goes to `RELAY_URLS` (comma-separated, default Damus and Primal, with throwaway keys).
 - **Zaps are public.** A receipt tells anyone reading those relays that this address received an amount
   at a given time, from the zap sender's Nostr key. That is how zaps work; payments without a zap request
   publish nothing.
 
 Nothing about payers is stored, and the app's own log lines don't include usernames, pubkeys, invoices or
-amounts.
+amounts. A zap receipt that no relay accepts is logged with the relays' hosts and reasons; those relays are
+chosen by the payer, not the receiving user.

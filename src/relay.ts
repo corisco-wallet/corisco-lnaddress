@@ -17,9 +17,9 @@ type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | Look
 export function publicOnlyLookup(hostname: string, options: object, callback: LookupCallback): void {
   dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err, []);
-    if (addresses.length === 0) return callback(Object.assign(new Error(`relay ${hostname} has no address`), { code: "ENOTFOUND" }), []);
+    if (addresses.length === 0) return callback(Object.assign(new Error("has no address"), { code: "ENOTFOUND" }), []);
     const blocked = addresses.find((entry) => isPrivateAddress(entry.address));
-    if (blocked) return callback(Object.assign(new Error(`relay ${hostname} resolves to a private address`), { code: "EPRIVATE" }), []);
+    if (blocked) return callback(Object.assign(new Error("resolves to a private address"), { code: "EPRIVATE" }), []);
     if ((options as { all?: boolean }).all) return callback(null, addresses);
     callback(null, addresses[0].address, addresses[0].family);
   });
@@ -47,12 +47,12 @@ export function publishToRelay(url: string, event: NostrEvent, { keys, policy, t
       if (err) reject(err);
       else resolve();
     };
-    const timer = setTimeout(() => finish(new Error(`relay ${url} timed out`)), timeoutMs);
+    const timer = setTimeout(() => finish(new Error("timed out")), timeoutMs);
     const sendEvent = () => socket.send(JSON.stringify(["EVENT", event]));
 
     socket.on("open", sendEvent);
     socket.on("error", (err) => finish(err));
-    socket.on("close", () => finish(new Error(`relay ${url} closed the connection`)));
+    socket.on("close", () => finish(new Error("closed the connection")));
     socket.on("message", (data) => {
       let message: unknown;
       try {
@@ -78,7 +78,7 @@ export function publishToRelay(url: string, event: NostrEvent, { keys, policy, t
       if (id === authEventId) {
         authAccepted = accepted;
         if (!resendAfterAuth) return;
-        if (!accepted) return finish(new Error(`relay ${url} rejected AUTH: ${reason ?? ""}`));
+        if (!accepted) return finish(new Error(`rejected AUTH: ${reason ?? ""}`));
         resendAfterAuth = false;
         sendEvent();
         return;
@@ -92,13 +92,21 @@ export function publishToRelay(url: string, event: NostrEvent, { keys, policy, t
         else resendAfterAuth = true;
         return;
       }
-      finish(new Error(`relay ${url} rejected the event: ${reason ?? ""}`));
+      finish(new Error(`rejected the event: ${reason ?? ""}`));
     });
   });
 }
 
-/** Publishes to every relay at once; returns how many accepted the event. */
-export async function publishToRelays(relays: string[], event: NostrEvent, options: PublishOptions): Promise<number> {
+export interface PublishResult {
+  accepted: number;
+  failures: { relay: string; reason: string }[];
+}
+
+/** Publishes to every relay at once. */
+export async function publishToRelays(relays: string[], event: NostrEvent, options: PublishOptions): Promise<PublishResult> {
   const results = await Promise.allSettled(relays.map((url) => publishToRelay(url, event, options)));
-  return results.filter((result) => result.status === "fulfilled").length;
+  const failures = results.flatMap((result, i) =>
+    result.status === "rejected" ? [{ relay: relays[i], reason: (result.reason as Error)?.message ?? String(result.reason) }] : [],
+  );
+  return { accepted: relays.length - failures.length, failures };
 }

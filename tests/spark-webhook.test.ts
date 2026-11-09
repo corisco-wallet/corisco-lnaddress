@@ -126,10 +126,25 @@ describe("webhook config", () => {
     });
   });
 
+  it("registers the webhook on API_BASE_URL when it is set", () => {
+    expect(loadConfig({ ...base, API_BASE_URL: "https://api.example.test/", SPARK_WEBHOOK_SECRET: SECRET }).sparkWebhook).toEqual({
+      url: "https://api.example.test/webhooks/spark",
+      secret: SECRET,
+    });
+  });
+
+  it("checks API_BASE_URL like PUBLIC_BASE_URL", () => {
+    expect(() => loadConfig({ ...base, API_BASE_URL: "api.example.test" })).toThrow(/API_BASE_URL/);
+    expect(() => loadConfig({ ...base, SPARK_NETWORK: "MAINNET", API_BASE_URL: "http://api.example.test" })).toThrow(/https on MAINNET/);
+  });
+
   it("needs a long secret and https", () => {
     expect(() => loadConfig({ ...base, SPARK_WEBHOOK_SECRET: "short" })).toThrow(/32/);
     expect(() =>
       loadConfig({ ...base, PUBLIC_BASE_URL: "http://localhost:3000", SPARK_WEBHOOK_SECRET: SECRET }),
     ).toThrow(/https/);
+    expect(() =>
+      loadConfig({ ...base, API_BASE_URL: "http://localhost:3000", SPARK_WEBHOOK_SECRET: SECRET }),
+    ).toThrow(/https API_BASE_URL/);
   });
 });

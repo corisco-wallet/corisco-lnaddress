@@ -24,7 +24,9 @@ const pool = createPool({
   connectionLimit: 10,
 });
 
-await runMigrations(pool);
+console.log(`network ${config.network}`);
+const migrated = await runMigrations(pool);
+if (migrated.length > 0) console.log(`migrations applied: ${migrated.join(", ")}`);
 const cipher = createDataCipher(config.dataKey);
 const users = new MysqlUserStore(pool, cipher);
 await users.verifyKey();
@@ -63,6 +65,7 @@ if (zapPublisher) {
   settlement.onSettled(() => zapPublisher.kick());
   zapPublisher.start();
 }
+console.log(zapPublisher ? "nostr zaps enabled" : "nostr zaps disabled (NOSTR_SECRET_KEY not set)");
 settlement.start();
 
 const app = createApp({
@@ -84,10 +87,17 @@ const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => cons
 
 // Register only once listening, since Spark may call the URL while registering; poll quickly until then.
 if (config.sparkWebhook) {
+  const { url } = config.sparkWebhook;
   void registerWebhook(config.sparkWebhook).then((active) => {
-    if (active) settlement.useSchedule(backstopCheckDelay);
-    else console.warn("spark webhook unavailable; polling for settlement instead");
+    if (active) {
+      settlement.useSchedule(backstopCheckDelay);
+      console.log(`spark webhook registered at ${url}; polling only as a backstop`);
+    } else {
+      console.warn(`spark webhook unavailable at ${url}; polling for settlement instead`);
+    }
   });
+} else {
+  console.log("spark webhook disabled (SPARK_WEBHOOK_SECRET not set); polling for settlement");
 }
 
 process.on("SIGTERM", () => {

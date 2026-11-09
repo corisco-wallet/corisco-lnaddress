@@ -60,6 +60,11 @@ describe("publishToRelays", () => {
   it("counts the relays that accepted", async () => {
     const ok = await relay();
     const refuses = await relay({ respond: () => [false, "blocked:"] });
-    expect(await publishToRelays([ok.url, refuses.url, "ws://localhost:1"], event, LOCAL)).toBe(1);
+    const result = await publishToRelays([ok.url, refuses.url, "ws://localhost:1"], event, LOCAL);
+    expect(result.accepted).toBe(1);
+    expect(result.failures).toEqual([
+      { relay: refuses.url, reason: "rejected the event: blocked:" },
+      { relay: "ws://localhost:1", reason: expect.any(String) },
+    ]);
   });
 });
