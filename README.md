@@ -85,8 +85,9 @@ restart never loses one.
   (the resolved IP is checked too); REGTEST also allows `ws://` and local relays for development.
 - **Testing on regtest:** `npm run dev:zap` registers a fresh address, sends invalid and valid zap
   requests, pays the invoice from `PAYER_MNEMONIC` and checks the receipt the way a client would. Point it
-  at a deployment with `BASE_URL=https://test.corisco.org LNADDRESS_DOMAIN=test.corisco.org`; the receipt
-  goes to `RELAY_URL` (default `wss://nos.lol`, with throwaway keys).
+  at a deployment with `BASE_URL` (registration) and `LNURL_BASE_URL` (LNURL endpoints, if served elsewhere), e.g.
+  `BASE_URL=https://api.test.corisco.org LNURL_BASE_URL=https://test.corisco.org LNADDRESS_DOMAIN=test.corisco.org`; the receipt
+  goes to `RELAY_URLS` (comma-separated, default Damus and Primal, with throwaway keys).
 - **Zaps are public.** A receipt tells anyone reading those relays that this address received an amount
   at a given time, from the zap sender's Nostr key. That is how zaps work; payments without a zap request
   publish nothing.

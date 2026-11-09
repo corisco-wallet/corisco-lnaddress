@@ -10,9 +10,11 @@ import { type NostrEvent, type NostrKeys, keysFromSecret, parseSignedEvent, sign
 // End-to-end NIP-57 check against a running server on regtest: zap a fresh address, pay it, and verify the receipt
 // the way a Nostr client would.
 const baseUrl = (process.env.BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+const lnurlBaseUrl = (process.env.LNURL_BASE_URL ?? baseUrl).replace(/\/+$/, "");
 const domain = process.env.LNADDRESS_DOMAIN;
 const payerMnemonic = process.env.PAYER_MNEMONIC;
-const relayUrl = process.env.RELAY_URL ?? "wss://nos.lol";
+// Some public relays (nos.lol) silently drop writes from unknown pubkeys, so list several, as clients do.
+const relayUrls = (process.env.RELAY_URLS ?? "wss://relay.damus.io,wss://relay.primal.net").split(",").map((url) => url.trim());
 const amountSats = Number(process.env.AMOUNT_SATS ?? 21);
 const receiptTimeoutMs = Number(process.env.RECEIPT_TIMEOUT_MS ?? 90_000);
 
@@ -44,34 +46,36 @@ function buildZapRequest(sender: NostrKeys, recipient: string, amountMsat: numbe
       kind: 9734,
       created_at: Math.floor(Date.now() / 1000),
       content: "corisco zap-flow test",
-      tags: [["relays", relayUrl], ["amount", String(amountMsat)], ["p", recipient], ...extraTags],
+      tags: [["relays", ...relayUrls], ["amount", String(amountMsat)], ["p", recipient], ...extraTags],
     },
     sender,
   );
   return JSON.stringify(event);
 }
 
-/** Subscribes before paying, so a receipt published right after settlement isn't missed. */
-function waitForReceipt(recipient: string, zapRequest: string): { receipt: Promise<NostrEvent>; close: () => void } {
-  const socket = new WebSocket(relayUrl);
+/** Subscribes on every relay before paying, so a receipt published right after settlement isn't missed. */
+function waitForReceipt(recipient: string, zapRequest: string): { receipt: Promise<{ event: NostrEvent; relay: string }>; close: () => void } {
+  const sockets = relayUrls.map((url) => ({ url, socket: new WebSocket(url) }));
   const subId = "zap-flow-" + Math.random().toString(36).slice(2, 8);
   let close = () => {};
-  const receipt = new Promise<NostrEvent>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no receipt on ${relayUrl} within ${receiptTimeoutMs} ms`)), receiptTimeoutMs);
+  const receipt = new Promise<{ event: NostrEvent; relay: string }>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no receipt on ${relayUrls.join(", ")} within ${receiptTimeoutMs} ms`)), receiptTimeoutMs);
     close = () => {
       clearTimeout(timer);
-      socket.close();
+      for (const { socket } of sockets) socket.close();
     };
-    socket.on("error", reject);
-    socket.on("open", () => {
-      const filter = { kinds: [9735], "#p": [recipient], since: Math.floor(Date.now() / 1000) - 3600 };
-      socket.send(JSON.stringify(["REQ", subId, filter]));
-    });
-    socket.on("message", (data) => {
-      const [type, , event] = JSON.parse(data.toString()) as [string, string, NostrEvent];
-      if (type !== "EVENT") return;
-      if (event.tags.some((t) => t[0] === "description" && t[1] === zapRequest)) resolve(event);
-    });
+    for (const { url, socket } of sockets) {
+      socket.on("error", (err) => console.log(`relay ${url}: ${err.message}`));
+      socket.on("open", () => {
+        const filter = { kinds: [9735], "#p": [recipient], since: Math.floor(Date.now() / 1000) - 3600 };
+        socket.send(JSON.stringify(["REQ", subId, filter]));
+      });
+      socket.on("message", (data) => {
+        const [type, , event] = JSON.parse(data.toString()) as [string, string, NostrEvent];
+        if (type !== "EVENT") return;
+        if (event.tags.some((t) => t[0] === "description" && t[1] === zapRequest)) resolve({ event, relay: url });
+      });
+    }
   });
   return { receipt, close };
 }
@@ -90,7 +94,7 @@ const { username, address } = await getJson<{ username: string; address: string 
 console.log(`registered ${address}`);
 
 const payRequest = await getJson<{ callback: string; allowsNostr?: boolean; nostrPubkey?: string }>(
-  `${baseUrl}/.well-known/lnurlp/${username}`,
+  `${lnurlBaseUrl}/.well-known/lnurlp/${username}`,
 );
 check("payRequest advertises allowsNostr", payRequest.allowsNostr === true);
 check("nostrPubkey is 64 hex characters", /^[0-9a-f]{64}$/.test(payRequest.nostrPubkey ?? ""), String(payRequest.nostrPubkey));
@@ -134,8 +138,8 @@ if (payerMnemonic) {
 
 const paidAt = Date.now();
 try {
-  const receipt = await watch.receipt;
-  console.log(`receipt ${receipt.id} on ${relayUrl} after ${((Date.now() - paidAt) / 1000).toFixed(1)} s`);
+  const { event: receipt, relay } = await watch.receipt;
+  console.log(`receipt ${receipt.id} on ${relay} after ${((Date.now() - paidAt) / 1000).toFixed(1)} s`);
   const tag = (name: string) => receipt.tags.find((t) => t[0] === name)?.[1];
   const description = tag("description") ?? "";
   const bolt11 = tag("bolt11") ?? "";
