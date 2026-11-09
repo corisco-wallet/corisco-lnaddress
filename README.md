@@ -93,4 +93,5 @@ restart never loses one.
   publish nothing.
 
 Nothing about payers is stored, and the app's own log lines don't include usernames, pubkeys, invoices or
-amounts.
+amounts. A zap receipt that no relay accepts is logged with the relays' hosts and reasons; those relays are
+chosen by the payer, not the receiving user.

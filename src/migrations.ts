@@ -51,7 +51,8 @@ const MIGRATIONS: { id: string; sql: string }[] = [
   },
 ];
 
-export async function runMigrations(pool: Pool): Promise<void> {
+/** Returns the ids of the migrations this call applied. */
+export async function runMigrations(pool: Pool): Promise<string[]> {
   const connection = await pool.getConnection();
   try {
     const [[lock]] = await connection.query<RowDataPacket[]>("SELECT GET_LOCK(?, ?) AS acquired", [LOCK_NAME, LOCK_TIMEOUT_SECONDS]);
@@ -61,11 +62,14 @@ export async function runMigrations(pool: Pool): Promise<void> {
     );
     const [applied] = await connection.query<RowDataPacket[]>("SELECT id FROM schema_migrations");
     const done = new Set(applied.map((row) => row.id as string));
+    const ran: string[] = [];
     for (const migration of MIGRATIONS) {
       if (done.has(migration.id)) continue;
       await connection.query(migration.sql);
       await connection.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)", [migration.id, Date.now()]);
+      ran.push(migration.id);
     }
+    return ran;
   } finally {
     await connection.query("SELECT RELEASE_LOCK(?)", [LOCK_NAME]).catch(() => {});
     connection.release();

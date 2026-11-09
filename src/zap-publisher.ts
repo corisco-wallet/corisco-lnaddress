@@ -1,13 +1,13 @@
 import type { InvoiceStore, ZapReceiptJob } from "./invoice-store";
 import type { NostrEvent, NostrKeys } from "./nostr";
-import { type PublishOptions, publishToRelays } from "./relay";
+import { type PublishOptions, type PublishResult, publishToRelays } from "./relay";
 import { type RelayPolicy, type ZapSigner, buildZapReceipt, receiptRelays } from "./zaps";
 
 const SECOND = 1000;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export type Publish = (relays: string[], event: NostrEvent, options: PublishOptions) => Promise<number>;
+export type Publish = (relays: string[], event: NostrEvent, options: PublishOptions) => Promise<PublishResult>;
 
 export interface ZapPublisherOptions {
   store: InvoiceStore;
@@ -19,6 +19,15 @@ export interface ZapPublisherOptions {
   batchSize?: number;
   /** A receipt that still hasn't reached any relay this long after payment is given up. */
   giveUpAfterMs?: number;
+}
+
+// Relay URLs are chosen by the payer, so logging their host doesn't identify the receiving user.
+function relayHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 /** 30 s, growing 1.5x per failed attempt, capped at an hour. */
@@ -90,30 +99,40 @@ export class ZapPublisher {
 
   /** Any failure, including a throw, counts as an attempt, so a job that keeps failing backs off and is eventually given up. */
   private async attempt(job: ZapReceiptJob): Promise<void> {
+    let refusals: string | undefined;
     try {
-      if (await this.publishOne(job)) return;
+      const result = await this.publishOne(job);
+      if (result === true) return;
+      refusals = result;
     } catch (err) {
       this.log.error("zap receipt failed:", err);
     }
-    await this.recordFailure(job).catch((err) => this.log.error("could not record a failed zap receipt:", err));
+    await this.recordFailure(job, refusals).catch((err) => this.log.error("could not record a failed zap receipt:", err));
   }
 
-  private async publishOne(job: ZapReceiptJob): Promise<boolean> {
+  /** True once a relay accepted the receipt; otherwise why each relay refused it. */
+  private async publishOne(job: ZapReceiptJob): Promise<true | string> {
     if ("error" in job) throw job.error;
     const keys: NostrKeys = this.options.signer.keysFor(job.receiverIdentityPubkey);
     const receipt = buildZapReceipt(job, keys);
     const relays = receiptRelays(JSON.parse(job.zapRequest), this.options.policy);
-    const accepted = await this.publish(relays, receipt, { keys, policy: this.options.policy });
-    if (accepted === 0) return false;
+    const { accepted, failures } = await this.publish(relays, receipt, { keys, policy: this.options.policy });
+    if (accepted === 0) return failures.map(({ relay, reason }) => `${relayHost(relay)}: ${reason}`).join("; ") || "no relays";
     await this.options.store.zapReceiptPublished(job.paymentHash, JSON.stringify(receipt));
     return true;
   }
 
-  private async recordFailure(job: ZapReceiptJob): Promise<void> {
+  /** `refusals` is set when every relay refused, and logged; a thrown failure was already logged. */
+  private async recordFailure(job: ZapReceiptJob, refusals?: string): Promise<void> {
     const attempts = job.attempts + 1;
     const now = this.now();
     const giveUp = now - job.settledAt > this.giveUpAfterMs;
-    if (giveUp) this.log.warn(`giving up on a zap receipt not published after ${attempts} attempts`);
+    if (giveUp) {
+      this.log.warn(`giving up on a zap receipt not published after ${attempts} attempts${refusals ? ` (${refusals})` : ""}`);
+    } else if (refusals) {
+      const delayS = Math.round(retryDelay(attempts) / SECOND);
+      this.log.warn(`zap receipt not accepted by any relay (attempt ${attempts}, retrying in ${delayS} s): ${refusals}`);
+    }
     await this.options.store.zapReceiptFailed(job.paymentHash, attempts, giveUp ? null : now + retryDelay(attempts));
   }
 }

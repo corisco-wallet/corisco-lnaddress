@@ -23,7 +23,8 @@ async function setup(accepted: () => number | Promise<number> = () => 1) {
   const sent: { relays: string[]; event: NostrEvent }[] = [];
   const publish: Publish = async (relays, event) => {
     sent.push({ relays, event });
-    return accepted();
+    const count = await accepted();
+    return { accepted: count, failures: count ? [] : relays.map((relay) => ({ relay, reason: "blocked: not today" })) };
   };
   const log = { error: vi.fn(), warn: vi.fn() };
   const publisher = new ZapPublisher({ store, signer, policy: { allowPrivate: false }, publish, now: () => clock, log });
@@ -52,11 +53,14 @@ describe("ZapPublisher", () => {
   });
 
   it("retries with backoff when no relay accepts it", async () => {
-    const { store, publisher, sent, at } = await setup(() => 0);
+    const { store, publisher, sent, log, at } = await setup(() => 0);
     await store.markSettled(HASH, PREIMAGE, 0);
     at(1_000);
     await publisher.publishDue();
     expect(store.zapOf(HASH)).toMatchObject({ state: "pending", attempts: 1, nextAttemptAt: 31_000 });
+    expect(log.warn).toHaveBeenCalledWith(
+      "zap receipt not accepted by any relay (attempt 1, retrying in 30 s): relay.example.com: blocked: not today; nos.example.org: blocked: not today",
+    );
     at(30_999);
     await publisher.publishDue();
     expect(sent).toHaveLength(1);
