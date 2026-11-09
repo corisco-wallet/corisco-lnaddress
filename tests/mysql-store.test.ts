@@ -30,7 +30,7 @@ describe.skipIf(!url)("MySQL", () => {
     await pool.query("DROP TABLE IF EXISTS invoices");
     await pool.query("DROP TABLE IF EXISTS users");
     await pool.query("DROP TABLE IF EXISTS schema_migrations");
-    await runMigrations(pool);
+    expect(await runMigrations(pool)).toEqual(["001-create-users", "002-create-invoices", "003-add-zaps"]);
   });
 
   afterAll(async () => {
@@ -46,12 +46,12 @@ describe.skipIf(!url)("MySQL", () => {
     it("can run again, and from two processes at once", async () => {
       const other = createPool(url!);
       try {
-        await Promise.all([runMigrations(pool), runMigrations(other), runMigrations(pool)]);
+        expect(await Promise.all([runMigrations(pool), runMigrations(other), runMigrations(pool)])).toEqual([[], [], []]);
       } finally {
         await other.end();
       }
-      const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM schema_migrations");
-      expect(rows.map((r) => r.id)).toEqual(["001-create-users", "002-create-invoices"]);
+      const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM schema_migrations ORDER BY id");
+      expect(rows.map((r) => r.id)).toEqual(["001-create-users", "002-create-invoices", "003-add-zaps"]);
     });
   });
 
