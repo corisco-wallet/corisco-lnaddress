@@ -56,8 +56,10 @@ How payment is detected: a background watcher asks Spark for the status of each 
 right after it is created and less often later. An invoice counts as paid only when Spark reports the
 payment as received **and** returns a preimage whose SHA-256 matches the payment hash.
 
-With `SPARK_WEBHOOK_SECRET` set (and an https `PUBLIC_BASE_URL`), the server registers
-`PUBLIC_BASE_URL/webhooks/spark` with Spark on startup for `SPARK_LIGHTNING_RECEIVE_FINISHED` events.
+With `SPARK_WEBHOOK_SECRET` set, the server registers `API_BASE_URL/webhooks/spark` with Spark on
+startup for `SPARK_LIGHTNING_RECEIVE_FINISHED` events. `API_BASE_URL` is the host that serves the API
+(registration and webhooks) when it differs from the LNURL host; it defaults to `PUBLIC_BASE_URL` and
+must be https.
 A delivery whose `X-Spark-Signature` matches only makes that invoice due for a check right away; the check
 itself still asks Spark and verifies the preimage, so a forged or replayed webhook can't mark anything
 paid. Polling keeps running as a backstop for missed deliveries, but slowly (30 s, then every 2 min).
