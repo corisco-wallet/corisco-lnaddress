@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/corisco-wallet/corisco-lnaddress/compare/v0.2.0...v0.3.0) (2026-11-09)
+
+
+### Features
+
+* store invoices and track their settlement ([#20](https://github.com/corisco-wallet/corisco-lnaddress/issues/20)) ([0e855d5](https://github.com/corisco-wallet/corisco-lnaddress/commit/0e855d52c921ddda3cfe862bb17ebceae7e66b40))
+* support nostr zaps (nip-57) ([#23](https://github.com/corisco-wallet/corisco-lnaddress/issues/23)) ([53783a2](https://github.com/corisco-wallet/corisco-lnaddress/commit/53783a21b8192a8f72aa4eecd684adb2375cca06))
+
+
+### Bug Fixes
+
+* register the spark webhook on the api host ([#24](https://github.com/corisco-wallet/corisco-lnaddress/issues/24)) ([4f48bd7](https://github.com/corisco-wallet/corisco-lnaddress/commit/4f48bd75c48087d723b2538157792e71d60220cf))
+
 ## [0.2.0](https://github.com/corisco-wallet/corisco-lnaddress/compare/v0.1.1...v0.2.0) (2026-10-19)
 
 
