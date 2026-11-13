@@ -23,7 +23,7 @@
     "@noble/hashes": "^2.4.0",
     "@scure/base": "^1.2.6",
     "better-sqlite3": "^12.11.1",
-    "hono": "^4.13.13",
+    "hono": "^4.13.18",
     "light-bolt11-decoder": "^3.2.0",
     "mysql2": "^3.24.6",
     "tsx": "^4.23.15",
